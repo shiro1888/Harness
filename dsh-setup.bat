@@ -47,7 +47,7 @@ call "%NPM%" config set registry https://registry.npmmirror.com
 
 if not exist "%DSH%" (
     echo       Installing @deepseek-ai/dsh (first time, may take a few minutes)...
-    call "%NPM%" install -g @deepseek-ai/dsh --no-fund --no-audit
+    call "%NPM%" install -g @deepseek-ai/dsh --prefix "%NODE_DIR%" --no-fund --no-audit
     if errorlevel 1 (
         echo.
         echo dsh install failed. Check network, then run this again.
@@ -56,6 +56,15 @@ if not exist "%DSH%" (
     )
 ) else (
     echo       dsh already installed, skip.
+)
+
+if not exist "%DSH%" (
+    echo.
+    echo ERROR: install finished but dsh.cmd was not found in:
+    echo   %NODE_DIR%
+    echo Run this again, or copy the error text and send it to us.
+    pause
+    exit /b 1
 )
 
 rem ---- 3) Launch ----
