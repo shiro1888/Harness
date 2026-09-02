@@ -1,6 +1,5 @@
 @echo off
 setlocal EnableExtensions
-chcp 65001 >nul
 title DeepSeek Harness Installer
 cd /d "%~dp0"
 
