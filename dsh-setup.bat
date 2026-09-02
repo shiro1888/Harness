@@ -45,7 +45,7 @@ echo [3/3] Configure npm mirror + install dsh ...
 call "%NPM%" config set registry https://registry.npmmirror.com
 
 if not exist "%DSH%" (
-    echo       Installing @deepseek-ai/dsh (first time, may take a few minutes)...
+    echo       Installing @deepseek-ai/dsh. This may take a few minutes...
     call "%NPM%" install -g @deepseek-ai/dsh --prefix "%NODE_DIR%" --no-fund --no-audit
     if errorlevel 1 (
         echo.
@@ -68,9 +68,18 @@ if not exist "%DSH%" (
 
 rem ---- 3) Launch ----
 echo.
-echo Starting DeepSeek Harness Web UI -^> http://127.0.0.1:3080
-echo (Press Ctrl+C to stop the server.)
+echo ============================================================
+echo   INSTALL COMPLETE.  Starting the Web UI server ...
+echo.
+echo   1) Keep this black window OPEN while you use dsh.
+echo   2) First launch may take 30-60 seconds.
+echo   3) Then open this address in your browser:
+echo        http://127.0.0.1:3080
+echo      (If the page does not load, wait a little and refresh.)
+echo ============================================================
 echo.
 call "%DSH%" web
 
+echo.
+echo Server stopped. Press any key to close this window.
 pause
