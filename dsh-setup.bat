@@ -73,9 +73,10 @@ echo   INSTALL COMPLETE.  Starting the Web UI server ...
 echo.
 echo   1) Keep this black window OPEN while you use dsh.
 echo   2) First launch may take 30-60 seconds.
-echo   3) Then open this address in your browser:
-echo        http://127.0.0.1:3080
-echo      (If the page does not load, wait a little and refresh.)
+echo   3) The browser should open automatically.
+echo      If it does NOT open, copy the full address that
+echo      contains ?token= from the lines below and paste
+echo      it into your browser's address bar.
 echo ============================================================
 echo.
 call "%DSH%" web
