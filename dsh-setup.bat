@@ -65,7 +65,7 @@ $DshCmd = Join-Path $NodeRoot 'dsh.cmd'
 $DshManifest = Join-Path $NodeRoot 'node_modules\@deepseek-ai\dsh\package.json'
 $NpmConfig = Join-Path $RuntimeRoot 'installer.npmrc'
 $NpmCache = Join-Path $RuntimeRoot 'npm-cache'
-$FallbackNodeVersion = 'v24.21.0'
+$FallbackNodeVersion = 'v24.20.0'
 $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
 
 function Write-Step {
