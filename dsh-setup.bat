@@ -233,6 +233,70 @@ function Get-LatestNodeRelease {
     }
 }
 
+function Get-CurlExecutable {
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($null -eq $curl) {
+        return $null
+    }
+
+    # 部分 Windows 10（20H1/20H2/21H1 等）自带的 curl 是 7.55.1，而
+    # --ssl-revoke-best-effort 自 curl 7.70.0 才提供。参数不被识别时 curl 会以
+    # 退出码 2 直接失败，所以这里先用 --help 探测一次，只在不支持时省略该参数。
+    $supportsRevokeBestEffort = $false
+    try {
+        $savedErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $help = (& $curl.Source --help all 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            $help = (& $curl.Source --help 2>&1 | Out-String)
+        }
+        $ErrorActionPreference = $savedErrorAction
+        $supportsRevokeBestEffort = $help -match 'ssl-revoke-best-effort'
+    } catch {
+        $supportsRevokeBestEffort = $false
+    }
+
+    return [pscustomobject]@{
+        Path = $curl.Source
+        SupportsRevokeBestEffort = $supportsRevokeBestEffort
+    }
+}
+
+function Invoke-SingleDownload {
+    param(
+        [string]$Uri,
+        [string]$Destination
+    )
+
+    # 先试 curl：支持 --ssl-revoke-best-effort 时带上它（可绕开 Schannel 吊销
+    # 检查失败导致的下载中断），不支持则省略该参数。
+    $curl = Get-CurlExecutable
+    if ($null -ne $curl) {
+        $curlArguments = @('--location', '--fail', '--silent', '--show-error', '--retry', '3', '--connect-timeout', '20')
+        if ($curl.SupportsRevokeBestEffort) {
+            $curlArguments += '--ssl-revoke-best-effort'
+        }
+        $curlArguments += @('--output', $Destination, $Uri)
+
+        $savedErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $curl.Path @curlArguments
+            $curlExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $savedErrorAction
+        }
+
+        if ($curlExitCode -eq 0) {
+            return
+        }
+        Write-Notice ("curl 下载失败（退出码 {0}），改用系统下载组件重试。" -f $curlExitCode)
+    }
+
+    # curl 缺失或失败时用系统内置下载组件兜底，保证单个地址仍有机会成功。
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
+}
+
 function Invoke-FileDownload {
     param(
         [string[]]$Uris,
@@ -246,15 +310,7 @@ function Invoke-FileDownload {
 
         Write-Host ("  下载：{0}" -f $uri)
         try {
-            $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-            if ($null -ne $curl) {
-                & $curl.Source --location --fail --silent --show-error --retry 3 --connect-timeout 20 --ssl-revoke-best-effort --output $Destination $uri
-                if ($LASTEXITCODE -ne 0) {
-                    throw "curl 退出码 $LASTEXITCODE"
-                }
-            } else {
-                Invoke-WebRequest -Uri $uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
-            }
+            Invoke-SingleDownload -Uri $uri -Destination $Destination
 
             $file = Get-Item -LiteralPath $Destination
             if ($file.Length -le 0) {
