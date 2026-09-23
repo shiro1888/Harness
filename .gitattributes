@@ -1,1 +1,8 @@
-*.bat text eol=crlf
+# 批处理文件按原样存储（不做换行转换）。
+#
+# 为什么不用 `text eol=crlf`：那样仓库里存的是 LF，只有 git 检出时才转成 CRLF。
+# 而 raw.githubusercontent.com 直接返回仓库里的 blob（LF），不做任何转换——
+# 用户按「使用说明」用 raw 链接下载时就会拿到 LF 版本，cmd.exe 解析多行
+# if (...) 块时报错（'xxx' is not recognized / ))" was unexpected），脚本无法运行。
+# 用 -text 让 .bat 原样存储，raw 与 zip 两种下载方式拿到的都是 CRLF。
+*.bat -text
