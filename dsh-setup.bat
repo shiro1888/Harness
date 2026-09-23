@@ -44,10 +44,33 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# 控制台代码页必须与 [Console]::OutputEncoding 一致，否则中文会乱码：
+# 中文版 Windows 的控制台默认是 936(GBK)，若只把 OutputEncoding 设为 UTF-8，
+# PowerShell 按 UTF-8 写出的字节会被控制台按 GBK 解读，中文全部变成乱码。
+# 因此先把代码页切到 65001(UTF-8) 再设置编码；切换失败则按原代码页输出。
+$consoleCodePage = 65001
+try {
+    $previousCodePage = [Console]::OutputEncoding.CodePage
+    $null = & chcp.com $consoleCodePage 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $consoleCodePage = $previousCodePage
+    }
+} catch {
+    $consoleCodePage = [Console]::OutputEncoding.CodePage
+}
+
 $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
-[Console]::InputEncoding = $utf8
-[Console]::OutputEncoding = $utf8
-$OutputEncoding = $utf8
+if ($consoleCodePage -eq 65001) {
+    [Console]::InputEncoding = $utf8
+    [Console]::OutputEncoding = $utf8
+    $OutputEncoding = $utf8
+} else {
+    # 代码页未能切换到 UTF-8（受限环境）：按实际代码页输出，中文才不会乱码。
+    $legacy = [System.Text.Encoding]::GetEncoding($consoleCodePage)
+    try { [Console]::InputEncoding = $legacy } catch {}
+    try { [Console]::OutputEncoding = $legacy } catch {}
+    $OutputEncoding = $legacy
+}
 
 try {
     $Host.UI.RawUI.WindowTitle = 'DeepSeek Harness 一键安装器'
