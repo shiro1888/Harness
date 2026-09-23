@@ -50,9 +50,9 @@ $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
 $OutputEncoding = $utf8
 
 try {
-    $Host.UI.RawUI.WindowTitle = 'DeepSeek Harness ?????'
+    $Host.UI.RawUI.WindowTitle = 'DeepSeek Harness 一键安装器'
 } catch {
-    # ?????????????????????
+    # 某些非交互终端不支持修改标题，不影响安装。
 }
 
 $SetupPath = [IO.Path]::GetFullPath($env:DSH_SETUP_FILE)
@@ -65,7 +65,7 @@ $DshCmd = Join-Path $NodeRoot 'dsh.cmd'
 $DshManifest = Join-Path $NodeRoot 'node_modules\@deepseek-ai\dsh\package.json'
 $NpmConfig = Join-Path $RuntimeRoot 'installer.npmrc'
 $NpmCache = Join-Path $RuntimeRoot 'npm-cache'
-$FallbackNodeVersion = 'v24.20.0'
+$FallbackNodeVersion = 'v24.21.0'
 $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
 
 function Write-Step {
@@ -76,12 +76,12 @@ function Write-Step {
 
 function Write-Ok {
     param([string]$Text)
-    Write-Host ("  [??] {0}" -f $Text) -ForegroundColor Green
+    Write-Host ("  [完成] {0}" -f $Text) -ForegroundColor Green
 }
 
 function Write-Notice {
     param([string]$Text)
-    Write-Host ("  [??] {0}" -f $Text) -ForegroundColor Yellow
+    Write-Host ("  [提示] {0}" -f $Text) -ForegroundColor Yellow
 }
 
 function Wait-ForClose {
@@ -93,7 +93,7 @@ function Wait-ForClose {
     try {
         [void](Read-Host $Text)
     } catch {
-        # ????????????
+        # 输入流不可用时直接结束。
     }
 }
 
@@ -106,7 +106,7 @@ function Get-MachineArchitecture {
     switch ($value.ToUpperInvariant()) {
         'AMD64' { return 'x64' }
         'ARM64' { return 'arm64' }
-        default { throw "????? Windows ???$value??? 64 ? x64 ? ARM64?" }
+        default { throw "暂不支持此 Windows 架构：$value。需要 64 位 x64 或 ARM64。" }
     }
 }
 
@@ -125,10 +125,10 @@ function Invoke-RegistryMetadata {
         $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 15
         $latest = [string]$metadata.'dist-tags'.latest
         if ([string]::IsNullOrWhiteSpace($latest)) {
-            throw '???? latest ??'
+            throw '没有找到 latest 标签'
         }
         if ($metadata.versions.PSObject.Properties.Name -notcontains $latest) {
-            throw "latest ????? $latest ????????"
+            throw "latest 指向的版本 $latest 不在仓库元数据中"
         }
         return [pscustomobject]@{
             Name = $Name
@@ -136,14 +136,14 @@ function Invoke-RegistryMetadata {
             Latest = $latest
         }
     } catch {
-        Write-Notice ("????{0}?{1}" -f $Name, $_.Exception.Message)
+        Write-Notice ("无法读取{0}：{1}" -f $Name, $_.Exception.Message)
         return $null
     }
 }
 
 function Get-LatestDshRelease {
-    $official = Invoke-RegistryMetadata -Registry 'https://registry.npmjs.org' -Name 'npm ????'
-    $mirror = Invoke-RegistryMetadata -Registry 'https://registry.npmmirror.com' -Name '?? npm ??'
+    $official = Invoke-RegistryMetadata -Registry 'https://registry.npmjs.org' -Name 'npm 官方仓库'
+    $mirror = Invoke-RegistryMetadata -Registry 'https://registry.npmmirror.com' -Name '国内 npm 镜像'
 
     if ($null -ne $official) {
         $installRegistry = $official.Registry
@@ -152,7 +152,7 @@ function Get-LatestDshRelease {
             $installRegistry = $mirror.Registry
             $installSource = $mirror.Name
         } elseif ($null -ne $mirror) {
-            Write-Notice ("??????? {0}??? latest ? {1}??????????" -f $mirror.Latest, $official.Latest)
+            Write-Notice ("国内镜像目前是 {0}，官方 latest 是 {1}；本次改用官方仓库。" -f $mirror.Latest, $official.Latest)
         }
 
         return [pscustomobject]@{
@@ -164,7 +164,7 @@ function Get-LatestDshRelease {
     }
 
     if ($null -ne $mirror) {
-        Write-Notice '?????? npm ???????????? latest ???'
+        Write-Notice '当前无法连接 npm 官方仓库，先以国内镜像的 latest 为准。'
         return [pscustomobject]@{
             Latest = $mirror.Latest
             Registry = $mirror.Registry
@@ -185,7 +185,7 @@ function Get-InstalledDshVersion {
         $manifest = Get-Content -LiteralPath $DshManifest -Raw -Encoding UTF8 | ConvertFrom-Json
         return [string]$manifest.version
     } catch {
-        Write-Notice '?? dsh ????????????????'
+        Write-Notice '现有 dsh 包信息无法读取，将执行修复安装。'
         return $null
     }
 }
@@ -196,11 +196,11 @@ function Get-LatestNodeRelease {
     $requiredFile = "win-$Architecture-zip"
     $sources = @(
         [pscustomobject]@{
-            Name = 'Node.js ????'
+            Name = 'Node.js 国内镜像'
             Index = 'https://npmmirror.com/mirrors/node/index.json'
         },
         [pscustomobject]@{
-            Name = 'Node.js ???'
+            Name = 'Node.js 官方站'
             Index = 'https://nodejs.org/dist/index.json'
         }
     )
@@ -222,14 +222,14 @@ function Get-LatestNodeRelease {
                 }
             }
         } catch {
-            Write-Notice ("????{0}?????{1}" -f $source.Name, $_.Exception.Message)
+            Write-Notice ("无法读取{0}版本列表：{1}" -f $source.Name, $_.Exception.Message)
         }
     }
 
-    Write-Notice ("?????? Node.js ?? LTS?????????????? {0}?" -f $FallbackNodeVersion)
+    Write-Notice ("暂时无法查询 Node.js 最新 LTS，改用安装器内置的已验证版本 {0}。" -f $FallbackNodeVersion)
     return [pscustomobject]@{
         Version = $FallbackNodeVersion
-        Name = '???????'
+        Name = '安装器内置版本'
     }
 }
 
@@ -244,13 +244,13 @@ function Invoke-FileDownload {
             Remove-Item -LiteralPath $Destination -Force
         }
 
-        Write-Host ("  ???{0}" -f $uri)
+        Write-Host ("  下载：{0}" -f $uri)
         try {
             $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
             if ($null -ne $curl) {
                 & $curl.Source --location --fail --silent --show-error --retry 3 --connect-timeout 20 --ssl-revoke-best-effort --output $Destination $uri
                 if ($LASTEXITCODE -ne 0) {
-                    throw "curl ??? $LASTEXITCODE"
+                    throw "curl 退出码 $LASTEXITCODE"
                 }
             } else {
                 Invoke-WebRequest -Uri $uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
@@ -258,15 +258,15 @@ function Invoke-FileDownload {
 
             $file = Get-Item -LiteralPath $Destination
             if ($file.Length -le 0) {
-                throw '????????'
+                throw '下载结果为空文件'
             }
             return
         } catch {
-            Write-Notice ("?????????{0}" -f $_.Exception.Message)
+            Write-Notice ("这个下载地址失败：{0}" -f $_.Exception.Message)
         }
     }
 
-    throw '?? Node.js ??????????????????'
+    throw '所有 Node.js 下载地址都失败了，请检查网络后重试。'
 }
 
 function Install-PortableNode {
@@ -284,7 +284,7 @@ function Install-PortableNode {
         "https://nodejs.org/dist/$version/$archiveName"
     )
 
-    Write-Step ("[1/3] ???? Node.js {0}?{1}?" -f $version, $Architecture)
+    Write-Step ("[1/3] 安装便携 Node.js {0}（{1}）" -f $version, $Architecture)
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 
     try {
@@ -298,12 +298,12 @@ function Install-PortableNode {
         $stagedNode = Join-Path $expandedNode 'node.exe'
         $stagedNpm = Join-Path $expandedNode 'npm.cmd'
         if (-not (Test-Path -LiteralPath $stagedNode -PathType Leaf) -or -not (Test-Path -LiteralPath $stagedNpm -PathType Leaf)) {
-            throw 'Node.js ???????? node.exe ? npm.cmd'
+            throw 'Node.js 压缩包解压后缺少 node.exe 或 npm.cmd'
         }
 
         $reportedVersion = (& $stagedNode --version 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne $version) {
-            throw "Node.js ??????? $version????? $reportedVersion"
+            throw "Node.js 自检失败，期望 $version，实际输出 $reportedVersion"
         }
 
         if (Test-Path -LiteralPath $backupRoot) {
@@ -325,7 +325,7 @@ function Install-PortableNode {
         if (Test-Path -LiteralPath $backupRoot) {
             Remove-Item -LiteralPath $backupRoot -Recurse -Force
         }
-        Write-Ok ("Node.js {0} ???????????{1}" -f $version, $release.Name)
+        Write-Ok ("Node.js {0} 已就绪，版本列表来自：{1}" -f $version, $release.Name)
     } finally {
         if (Test-Path -LiteralPath $archivePath) {
             Remove-Item -LiteralPath $archivePath -Force
@@ -342,12 +342,12 @@ function Ensure-PortableNode {
         try {
             $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
             if ($LASTEXITCODE -eq 0 -and $version -match '^v\d+\.\d+\.\d+$') {
-                Write-Step '[1/3] ???? Node.js'
-                Write-Ok ("??? {0}?????????????" -f $version)
+                Write-Step '[1/3] 检查便携 Node.js'
+                Write-Ok ("已安装 {0}，继续使用当前便携运行时。" -f $version)
                 return
             }
         } catch {
-            Write-Notice '???? Node.js ???????????'
+            Write-Notice '现有便携 Node.js 无法运行，将自动修复。'
         }
     }
 
@@ -442,7 +442,7 @@ function Find-DshDependencyDirectory {
         }
     }
 
-    throw "???? dsh ?????$Name"
+    throw "没有找到 dsh 运行依赖：$Name"
 }
 
 function Test-DshRuntimeDependencies {
@@ -450,24 +450,24 @@ function Test-DshRuntimeDependencies {
         $koffiRoot = Find-DshDependencyDirectory -Name 'koffi'
         $koffiProbe = Invoke-NodeProbe -JavaScript "require(process.argv[1]); process.stdout.write('ok')" -Argument $koffiRoot
         if ($koffiProbe.ExitCode -ne 0) {
-            return [pscustomobject]@{ Ok = $false; Message = "Koffi ?????$($koffiProbe.Output)" }
+            return [pscustomobject]@{ Ok = $false; Message = "Koffi 加载失败：$($koffiProbe.Output)" }
         }
 
         $ptyRoot = Find-DshDependencyDirectory -Name 'node-pty'
         $ptyScript = "const p=require(process.argv[1]);const c=p.spawn(process.env.ComSpec||'cmd.exe',['/d','/c','echo DSH_PTY_PROBE'],{name:'xterm',cols:80,rows:24,cwd:process.cwd(),env:process.env});let out='';const t=setTimeout(()=>process.exit(21),5000);c.onData(d=>out+=d);c.onExit(e=>{clearTimeout(t);process.exit(e.exitCode===0&&out.includes('DSH_PTY_PROBE')?0:22)});"
         $ptyProbe = Invoke-NodeProbe -JavaScript $ptyScript -Argument $ptyRoot
         if ($ptyProbe.ExitCode -ne 0) {
-            return [pscustomobject]@{ Ok = $false; Message = "??????????? $($ptyProbe.ExitCode)?$($ptyProbe.Output)" }
+            return [pscustomobject]@{ Ok = $false; Message = "伪终端自检失败，退出码 $($ptyProbe.ExitCode)：$($ptyProbe.Output)" }
         }
 
-        return [pscustomobject]@{ Ok = $true; Message = 'Koffi ? Windows ???????' }
+        return [pscustomobject]@{ Ok = $true; Message = 'Koffi 与 Windows 伪终端均可运行' }
     } catch {
         return [pscustomobject]@{ Ok = $false; Message = $_.Exception.Message }
     }
 }
 
 function Ensure-LatestDsh {
-    Write-Step '[2/3] ?? DeepSeek Harness ????'
+    Write-Step '[2/3] 检查 DeepSeek Harness 最新版本'
 
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
     $npmConfigText = [string]::Join([Environment]::NewLine, @('fund=false', 'audit=false', 'update-notifier=false', ''))
@@ -475,77 +475,77 @@ function Ensure-LatestDsh {
 
     $installed = Get-InstalledDshVersion
     if ($null -ne $installed) {
-        Write-Host ("  ???????{0}" -f $installed)
+        Write-Host ("  当前安装版本：{0}" -f $installed)
     } else {
-        Write-Host '  ??????????'
+        Write-Host '  当前安装版本：未安装'
     }
 
     $release = Get-LatestDshRelease
     $expectedVersion = $installed
     if ($null -eq $release) {
         if ($null -ne $installed -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-            Write-Notice ("?????????????????? {0}???????????" -f $installed)
+            Write-Notice ("网络检查失败，暂时继续使用已安装版本 {0}。下次运行会重新检查。" -f $installed)
         } else {
-            throw '???? npm ??????????????????? dsh?'
+            throw '无法连接 npm 官方仓库或国内镜像，且本机还没有可用的 dsh。'
         }
     } else {
         $expectedVersion = $release.Latest
-        Write-Host ("  ?? latest?{0}" -f $release.Latest)
+        Write-Host ("  官方 latest：{0}" -f $release.Latest)
         if ($installed -eq $release.Latest -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-            Write-Ok ("?????? {0}?" -f $installed)
+            Write-Ok ("已经是最新版 {0}。" -f $installed)
         } else {
             if ($null -eq $installed) {
-                Write-Host ("  ????{0}?? {1}??????????????" -f $release.Source, $release.Latest)
+                Write-Host ("  正在通过{0}安装 {1}，首次安装可能需要几分钟……" -f $release.Source, $release.Latest)
             } else {
-                Write-Host ("  ????{0}? {1} ??? {2}??" -f $release.Source, $installed, $release.Latest)
+                Write-Host ("  正在通过{0}把 {1} 更新到 {2}……" -f $release.Source, $installed, $release.Latest)
             }
 
             $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.Registry
             if ($exitCode -ne 0 -and $release.FallbackRegistry -and $release.FallbackRegistry -ne $release.Registry) {
-                Write-Notice '????????????? npm ???????'
+                Write-Notice '国内镜像安装失败，正在改用 npm 官方仓库重试。'
                 $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.FallbackRegistry
             }
             if ($exitCode -ne 0) {
-                throw "npm ?? dsh ???????$exitCode"
+                throw "npm 安装 dsh 失败，退出码：$exitCode"
             }
         }
     }
 
     $verifiedVersion = Get-InstalledDshVersion
     if ($verifiedVersion -ne $expectedVersion) {
-        throw "???????????? $expectedVersion??? $verifiedVersion"
+        throw "安装后版本校验失败，期望 $expectedVersion，实际 $verifiedVersion"
     }
     if (-not (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-        throw "??????????????$DshCmd"
+        throw "安装完成后没有找到启动文件：$DshCmd"
     }
 
     $cliOutput = (& $DshCmd --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "dsh --version ?????$cliOutput"
+        throw "dsh --version 运行失败：$cliOutput"
     }
     $cliLines = @($cliOutput -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($cliLines.Count -eq 0) {
-        throw 'dsh --version ???????'
+        throw 'dsh --version 没有返回版本号'
     }
     $cliVersion = $cliLines[-1].Trim()
     if ($cliVersion -ne $verifiedVersion) {
-        throw "dsh ???????????? $verifiedVersion????? $cliVersion"
+        throw "dsh 命令版本校验失败，包版本 $verifiedVersion，命令输出 $cliVersion"
     }
 
     $runtimeProbe = Test-DshRuntimeDependencies
     if (-not $runtimeProbe.Ok) {
-        Write-Notice ("???????????????????{0}" -f $runtimeProbe.Message)
+        Write-Notice ("运行依赖自检未通过，执行一次受限修复：{0}" -f $runtimeProbe.Message)
         $rebuildExit = Invoke-DshRebuild
         if ($rebuildExit -ne 0) {
-            throw "dsh ???????npm ????$rebuildExit"
+            throw "dsh 依赖修复失败，npm 退出码：$rebuildExit"
         }
         $runtimeProbe = Test-DshRuntimeDependencies
         if (-not $runtimeProbe.Ok) {
-            throw "dsh ????????????$($runtimeProbe.Message)"
+            throw "dsh 依赖修复后仍未通过自检：$($runtimeProbe.Message)"
         }
     }
 
-    Write-Ok ("dsh {0} ??????Koffi ???????" -f $verifiedVersion)
+    Write-Ok ("dsh {0} 已通过命令、Koffi 与伪终端自检。" -f $verifiedVersion)
     return $verifiedVersion
 }
 
@@ -570,10 +570,10 @@ function Get-WebPort {
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $requested = 0
         if (-not [int]::TryParse($env:DSH_SETUP_PORT, [ref]$requested) -or $requested -lt 1 -or $requested -gt 65535) {
-            throw "???????$($env:DSH_SETUP_PORT)"
+            throw "端口参数无效：$($env:DSH_SETUP_PORT)"
         }
         if (-not (Test-LocalPortAvailable -Port $requested)) {
-            throw "???? $requested ????????????"
+            throw "指定端口 $requested 已被占用，请换一个端口。"
         }
         return $requested
     }
@@ -581,30 +581,30 @@ function Get-WebPort {
     foreach ($candidate in 3080..3099) {
         if (Test-LocalPortAvailable -Port $candidate) {
             if ($candidate -ne 3080) {
-                Write-Notice ("?? 3080 ??????????? {0}?" -f $candidate)
+                Write-Notice ("端口 3080 已被占用，本次自动改用 {0}。" -f $candidate)
             }
             return $candidate
         }
     }
 
-    throw '?? 3080 ? 3099 ????????????????'
+    throw '端口 3080 到 3099 都被占用，请关闭占用程序后重试。'
 }
 
 function Main {
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_BAD_ARG)) {
-        throw "???????$($env:DSH_SETUP_BAD_ARG)??????--install-only?--port ???--no-open?--no-pause?"
+        throw "不支持的参数：$($env:DSH_SETUP_BAD_ARG)。可用参数：--install-only、--port 端口、--no-open、--no-pause。"
     }
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $validatedPort = 0
         if (-not [int]::TryParse($env:DSH_SETUP_PORT, [ref]$validatedPort) -or $validatedPort -lt 1 -or $validatedPort -gt 65535) {
-            throw "???????$($env:DSH_SETUP_PORT)"
+            throw "端口参数无效：$($env:DSH_SETUP_PORT)"
         }
     }
 
     Set-Location -LiteralPath $SetupRoot
     Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host '  DeepSeek Harness ??????Windows 10/11?64 ??' -ForegroundColor White
-    Write-Host '  ??????????????????? dsh latest' -ForegroundColor White
+    Write-Host '  DeepSeek Harness 一键安装器（Windows 10/11，64 位）' -ForegroundColor White
+    Write-Host '  便携安装、无需管理员、每次运行自动检查 dsh latest' -ForegroundColor White
     Write-Host '============================================================' -ForegroundColor DarkCyan
 
     Ensure-PortableNode
@@ -612,25 +612,25 @@ function Main {
 
     $npmVersion = (& $NpmCmd --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "npm ?????$npmVersion"
+        throw "npm 无法运行：$npmVersion"
     }
-    Write-Host ("  npm ???{0}" -f $npmVersion)
+    Write-Host ("  npm 版本：{0}" -f $npmVersion)
 
     $dshVersion = Ensure-LatestDsh
 
-    Write-Step '[3/3] ????????'
+    Write-Step '[3/3] 准备启动网页界面'
     if ($env:DSH_SETUP_INSTALL_ONLY -eq '1') {
-        Write-Ok ("????????dsh ???{0}" -f $dshVersion)
-        Write-Host ('  ?????"{0}" web' -f $DshCmd)
+        Write-Ok ("安装与校验完成，dsh 版本：{0}" -f $dshVersion)
+        Write-Host ('  启动命令："{0}" web' -f $DshCmd)
         return
     }
 
     $port = Get-WebPort
     Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host ("  ???? DeepSeek Harness {0}" -f $dshVersion) -ForegroundColor White
-    Write-Host ("  ?????http://127.0.0.1:{0}" -f $port) -ForegroundColor White
-    Write-Host '  ?????????????? Ctrl+C ??????' -ForegroundColor White
-    Write-Host '  ???????????????? ?token= ??????' -ForegroundColor White
+    Write-Host ("  即将启动 DeepSeek Harness {0}" -f $dshVersion) -ForegroundColor White
+    Write-Host ("  本地地址：http://127.0.0.1:{0}" -f $port) -ForegroundColor White
+    Write-Host '  使用期间请保持此窗口开启；按 Ctrl+C 可停止服务。' -ForegroundColor White
+    Write-Host '  浏览器若未自动打开，请复制下方带 ?token= 的完整地址。' -ForegroundColor White
     Write-Host '============================================================' -ForegroundColor DarkCyan
     Write-Host ''
 
@@ -641,19 +641,19 @@ function Main {
     }
     $webExitCode = $LASTEXITCODE
     if ($webExitCode -ne 0) {
-        throw "DeepSeek Harness ???????????$webExitCode"
+        throw "DeepSeek Harness 服务异常停止，退出码：$webExitCode"
     }
 
-    Write-Notice 'DeepSeek Harness ???????'
+    Write-Notice 'DeepSeek Harness 服务已经停止。'
 }
 
 try {
     Main
-    Wait-ForClose '????????'
+    Wait-ForClose '按回车键关闭窗口'
     exit 0
 } catch {
     Write-Host ''
-    Write-Host ("??????{0}" -f $_.Exception.Message) -ForegroundColor Red
-    Wait-ForClose '?????????????????????'
+    Write-Host ("安装器失败：{0}" -f $_.Exception.Message) -ForegroundColor Red
+    Wait-ForClose '请记录上面的错误信息，然后按回车键关闭窗口'
     exit 1
 }
