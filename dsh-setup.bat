@@ -2,6 +2,13 @@
 setlocal EnableExtensions
 title DeepSeek Harness
 set "DSH_SETUP_FILE=%~f0"
+set "DSH_SETUP_INSTALL_ONLY="
+set "DSH_SETUP_NONINTERACTIVE="
+set "DSH_SETUP_NO_OPEN="
+set "DSH_SETUP_FAST="
+set "DSH_SETUP_SHORTCUT="
+set "DSH_SETUP_HELP="
+set "DSH_SETUP_PORT="
 set "DSH_SETUP_BAD_ARG="
 
 :parse_arguments
@@ -302,10 +309,21 @@ function Invoke-ParallelRegistryQuery {
         $taskOff = $client.GetStringAsync("$OfficialRegistry/@deepseek-ai%2Fdsh")
         $taskMir = $client.GetStringAsync("$MirrorRegistry/@deepseek-ai%2Fdsh")
 
-        # 等待并发完成，最多 TimeoutSec 秒
-        try {
-            [System.Threading.Tasks.Task]::WaitAll(@($taskOff, $taskMir), ($TimeoutSec * 1000))
-        } catch {}
+        # 智能竞速等待：国内镜像通常极速返回，一旦镜像完成，最多再给官方 1.2 秒缓冲，避免死等超时
+        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+        $maxWaitMs = $TimeoutSec * 1000
+        $mirrorDoneTime = -1
+
+        while ($stopwatch.ElapsedMilliseconds -lt $maxWaitMs) {
+            if ($taskOff.IsCompleted -and $taskMir.IsCompleted) { break }
+            if ($taskMir.IsCompleted -and $mirrorDoneTime -lt 0) {
+                $mirrorDoneTime = $stopwatch.ElapsedMilliseconds
+            }
+            if ($mirrorDoneTime -ge 0 -and ($stopwatch.ElapsedMilliseconds - $mirrorDoneTime) -gt 1200) {
+                break
+            }
+            Start-Sleep -Milliseconds 40
+        }
 
         if ($taskOff.IsCompleted -and -not $taskOff.IsFaulted -and -not $taskOff.IsCanceled) {
             try {
@@ -948,7 +966,9 @@ function Main {
         & $DshCmd web --port $port
     }
     $webExitCode = $LASTEXITCODE
-    if ($webExitCode -ne 0) {
+    # 正常退出码包括：0、130 (SIGINT/Ctrl+C)、-1073741510 (0xC000013A STATUS_CONTROL_C_EXIT) 等
+    $isGracefulExit = ($webExitCode -eq 0 -or $webExitCode -eq 130 -or $webExitCode -eq -1073741510 -or $webExitCode -eq 3221225786)
+    if (-not $isGracefulExit) {
         throw "DeepSeek Harness 服务异常停止，退出码：$webExitCode"
     }
 
