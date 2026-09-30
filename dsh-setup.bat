@@ -21,14 +21,46 @@ if /I "%~1"=="--no-open" (
     shift
     goto parse_arguments
 )
+if /I "%~1"=="--fast" (
+    set "DSH_SETUP_FAST=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--skip-check" (
+    set "DSH_SETUP_FAST=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--create-shortcut" (
+    set "DSH_SETUP_SHORTCUT=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--shortcut" (
+    set "DSH_SETUP_SHORTCUT=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--help" (
+    set "DSH_SETUP_HELP=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="-h" (
+    set "DSH_SETUP_HELP=1"
+    shift
+    goto parse_arguments
+)
 if /I "%~1"=="--port" goto parse_port
-set "DSH_SETUP_BAD_ARG=%~1"
-goto run_installer
+if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
+shift
+goto parse_arguments
 
 :parse_port
 if "%~2"=="" (
-    set "DSH_SETUP_BAD_ARG=--port missing value"
-    goto run_installer
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--port 缺少端口数值"
+    shift
+    goto parse_arguments
 )
 set "DSH_SETUP_PORT=%~2"
 shift
@@ -73,9 +105,12 @@ if ($consoleCodePage -eq 65001) {
 }
 
 try {
-    $Host.UI.RawUI.WindowTitle = 'DeepSeek Harness 一键安装器'
+    $Host.UI.RawUI.WindowTitle = 'DeepSeek Harness 一键部署管理器'
+    if ($Host.UI.RawUI.WindowSize.Width -lt 85) {
+        $Host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size(88, [Math]::Max(28, $Host.UI.RawUI.WindowSize.Height))
+    }
 } catch {
-    # 某些非交互终端不支持修改标题，不影响安装。
+    # 某些非交互终端或环境不支持修改窗口尺寸/标题，不影响运行。
 }
 
 $SetupPath = [IO.Path]::GetFullPath($env:DSH_SETUP_FILE)
@@ -91,20 +126,82 @@ $NpmCache = Join-Path $RuntimeRoot 'npm-cache'
 $FallbackNodeVersion = 'v24.21.0'
 $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
 
+# ============================
+# UI 美化与提示函数
+# ============================
 function Write-Step {
     param([string]$Text)
     Write-Host ''
-    Write-Host $Text -ForegroundColor Cyan
+    Write-Host ("==> {0}" -f $Text) -ForegroundColor Cyan
 }
 
 function Write-Ok {
     param([string]$Text)
-    Write-Host ("  [完成] {0}" -f $Text) -ForegroundColor Green
+    Write-Host '  [✓] ' -ForegroundColor Green -NoNewline
+    Write-Host $Text -ForegroundColor White
+}
+
+function Write-Info {
+    param([string]$Text)
+    Write-Host '  [i] ' -ForegroundColor Cyan -NoNewline
+    Write-Host $Text -ForegroundColor Gray
 }
 
 function Write-Notice {
     param([string]$Text)
-    Write-Host ("  [提示] {0}" -f $Text) -ForegroundColor Yellow
+    Write-Host '  [!] ' -ForegroundColor Yellow -NoNewline
+    Write-Host $Text -ForegroundColor Yellow
+}
+
+function Write-Fail {
+    param([string]$Text)
+    Write-Host '  [×] ' -ForegroundColor Red -NoNewline
+    Write-Host $Text -ForegroundColor Red
+}
+
+function Show-Banner {
+    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host '                   DeepSeek Harness 一键部署管理器                      ' -ForegroundColor Cyan
+    Write-Host '       便携运行环境 · 自动镜像加速 · 完整环境自检 · 极速启动            ' -ForegroundColor Gray
+    Write-Host '========================================================================' -ForegroundColor DarkCyan
+}
+
+function Show-Dashboard {
+    param(
+        [string]$Version,
+        [int]$Port
+    )
+    Write-Host ''
+    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host '  DeepSeek Harness 网页服务启动成功！' -ForegroundColor Green
+    Write-Host ("  · 运行版本: {0}" -f $Version) -ForegroundColor Gray
+    Write-Host '  · 本地访问: ' -ForegroundColor Gray -NoNewline
+    Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host '  使用提示:' -ForegroundColor White
+    Write-Host '  1. 系统将自动尝试在默认浏览器中打开该页面' -ForegroundColor Gray
+    Write-Host '  2. 浏览器若未自动弹出，请复制控制台下方包含 ?token= 的完整链接' -ForegroundColor Gray
+    Write-Host '  3. 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' -ForegroundColor Gray
+    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host ''
+}
+
+function Show-Help {
+    Write-Host ''
+    Write-Host 'DeepSeek Harness 一键部署器 - 命令参数说明' -ForegroundColor Cyan
+    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host '  用法: dsh-setup.bat [选项]' -ForegroundColor White
+    Write-Host ''
+    Write-Host '  选项列表:' -ForegroundColor White
+    Write-Host '    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' -ForegroundColor Gray
+    Write-Host '    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' -ForegroundColor Gray
+    Write-Host '    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' -ForegroundColor Gray
+    Write-Host '    --no-open             启动服务后不自动调用浏览器打开网页' -ForegroundColor Gray
+    Write-Host '    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' -ForegroundColor Gray
+    Write-Host '    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' -ForegroundColor Gray
+    Write-Host '    --help, -h            显示此帮助信息' -ForegroundColor Gray
+    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host ''
 }
 
 function Wait-ForClose {
@@ -120,6 +217,30 @@ function Wait-ForClose {
     }
 }
 
+function New-DesktopShortcut {
+    try {
+        $desktop = [Environment]::GetFolderPath('Desktop')
+        $shortcutPath = Join-Path $desktop 'DeepSeek Harness.lnk'
+        $wsh = New-Object -ComObject WScript.Shell
+        $shortcut = $wsh.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $SetupPath
+        $shortcut.WorkingDirectory = $SetupRoot
+        $shortcut.Description = 'DeepSeek Harness 一键启动'
+        if (Test-Path -LiteralPath $NodeExe -PathType Leaf) {
+            $shortcut.IconLocation = "$NodeExe,0"
+        }
+        $shortcut.Save()
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
+        return $shortcutPath
+    } catch {
+        Write-Notice ("创建桌面快捷方式失败：{0}" -f $_.Exception.Message)
+        return $null
+    }
+}
+
+# ============================
+# 架构与网络查询逻辑
+# ============================
 function Get-MachineArchitecture {
     $value = $env:PROCESSOR_ARCHITEW6432
     if ([string]::IsNullOrWhiteSpace($value)) {
@@ -136,7 +257,8 @@ function Get-MachineArchitecture {
 function Invoke-RegistryMetadata {
     param(
         [string]$Registry,
-        [string]$Name
+        [string]$Name,
+        [int]$TimeoutSec = 8
     )
 
     $uri = "$Registry/@deepseek-ai%2Fdsh"
@@ -145,13 +267,10 @@ function Invoke-RegistryMetadata {
             Accept = 'application/vnd.npm.install-v1+json'
             'User-Agent' = 'deepseek-harness-windows-installer'
         }
-        $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 15
+        $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec $TimeoutSec
         $latest = [string]$metadata.'dist-tags'.latest
         if ([string]::IsNullOrWhiteSpace($latest)) {
             throw '没有找到 latest 标签'
-        }
-        if ($metadata.versions.PSObject.Properties.Name -notcontains $latest) {
-            throw "latest 指向的版本 $latest 不在仓库元数据中"
         }
         return [pscustomobject]@{
             Name = $Name
@@ -159,14 +278,99 @@ function Invoke-RegistryMetadata {
             Latest = $latest
         }
     } catch {
-        Write-Notice ("无法读取{0}：{1}" -f $Name, $_.Exception.Message)
         return $null
     }
 }
 
+function Invoke-ParallelRegistryQuery {
+    param(
+        [string]$OfficialRegistry = 'https://registry.npmjs.org',
+        [string]$MirrorRegistry = 'https://registry.npmmirror.com',
+        [int]$TimeoutSec = 8
+    )
+
+    $officialRes = $null
+    $mirrorRes = $null
+
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+        $client = New-Object System.Net.Http.HttpClient
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+        $client.DefaultRequestHeaders.Add('User-Agent', 'deepseek-harness-windows-installer')
+        $client.DefaultRequestHeaders.Add('Accept', 'application/vnd.npm.install-v1+json')
+
+        $taskOff = $client.GetStringAsync("$OfficialRegistry/@deepseek-ai%2Fdsh")
+        $taskMir = $client.GetStringAsync("$MirrorRegistry/@deepseek-ai%2Fdsh")
+
+        # 等待并发完成，最多 TimeoutSec 秒
+        try {
+            [System.Threading.Tasks.Task]::WaitAll(@($taskOff, $taskMir), ($TimeoutSec * 1000))
+        } catch {}
+
+        if ($taskOff.IsCompleted -and -not $taskOff.IsFaulted -and -not $taskOff.IsCanceled) {
+            try {
+                $meta = $taskOff.Result | ConvertFrom-Json
+                $latest = [string]$meta.'dist-tags'.latest
+                if (-not [string]::IsNullOrWhiteSpace($latest)) {
+                    $officialRes = [pscustomobject]@{
+                        Name = 'npm 官方仓库'
+                        Registry = $OfficialRegistry
+                        Latest = $latest
+                    }
+                }
+            } catch {}
+        }
+
+        if ($taskMir.IsCompleted -and -not $taskMir.IsFaulted -and -not $taskMir.IsCanceled) {
+            try {
+                $meta = $taskMir.Result | ConvertFrom-Json
+                $latest = [string]$meta.'dist-tags'.latest
+                if (-not [string]::IsNullOrWhiteSpace($latest)) {
+                    $mirrorRes = [pscustomobject]@{
+                        Name = '国内 npm 镜像'
+                        Registry = $MirrorRegistry
+                        Latest = $latest
+                    }
+                }
+            } catch {}
+        }
+    } catch {
+        # 异步客户端不可用时，优雅回退到逐个查询
+        $officialRes = Invoke-RegistryMetadata -Registry $OfficialRegistry -Name 'npm 官方仓库' -TimeoutSec 5
+        $mirrorRes = Invoke-RegistryMetadata -Registry $MirrorRegistry -Name '国内 npm 镜像' -TimeoutSec 5
+    } finally {
+        if ($null -ne $client) {
+            try { $client.Dispose() } catch {}
+        }
+    }
+
+    return [pscustomobject]@{
+        Official = $officialRes
+        Mirror = $mirrorRes
+    }
+}
+
 function Get-LatestDshRelease {
-    $official = Invoke-RegistryMetadata -Registry 'https://registry.npmjs.org' -Name 'npm 官方仓库'
-    $mirror = Invoke-RegistryMetadata -Registry 'https://registry.npmmirror.com' -Name '国内 npm 镜像'
+    param([string]$InstalledVersion)
+
+    # 1. 如果用户指定了 --fast 或 --skip-check，且本地已有正常运行版本，直接跳过网络检查
+    if ($env:DSH_SETUP_FAST -eq '1') {
+        if (-not [string]::IsNullOrWhiteSpace($InstalledVersion) -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
+            Write-Info '已启用极速模式 (--fast)，跳过在线版本检查，直接加载本地版本。'
+            return [pscustomobject]@{
+                Latest = $InstalledVersion
+                Registry = $null
+                Source = '本地极速模式'
+                FallbackRegistry = $null
+                Skipped = $true
+            }
+        }
+    }
+
+    Write-Info '正在并发查询 npm 官方仓库与国内镜像最新发布信息...'
+    $query = Invoke-ParallelRegistryQuery
+    $official = $query.Official
+    $mirror = $query.Mirror
 
     if ($null -ne $official) {
         $installRegistry = $official.Registry
@@ -174,8 +378,11 @@ function Get-LatestDshRelease {
         if ($null -ne $mirror -and $mirror.Latest -eq $official.Latest) {
             $installRegistry = $mirror.Registry
             $installSource = $mirror.Name
+            Write-Ok ("官方最新版本为 {0}（国内镜像已同步，优先选用国内镜像加速）" -f $official.Latest)
         } elseif ($null -ne $mirror) {
-            Write-Notice ("国内镜像目前是 {0}，官方 latest 是 {1}；本次改用官方仓库。" -f $mirror.Latest, $official.Latest)
+            Write-Notice ("国内镜像当前为 {0}，官方最新版本为 {1}；将从官方仓库安装。" -f $mirror.Latest, $official.Latest)
+        } else {
+            Write-Ok ("已获取官方最新版本：{0}" -f $official.Latest)
         }
 
         return [pscustomobject]@{
@@ -183,16 +390,30 @@ function Get-LatestDshRelease {
             Registry = $installRegistry
             Source = $installSource
             FallbackRegistry = $official.Registry
+            Skipped = $false
         }
     }
 
     if ($null -ne $mirror) {
-        Write-Notice '当前无法连接 npm 官方仓库，先以国内镜像的 latest 为准。'
+        Write-Notice 'npm 官方仓库当前连接较慢或不可用，先以国内镜像 latest 为准。'
         return [pscustomobject]@{
             Latest = $mirror.Latest
             Registry = $mirror.Registry
             Source = $mirror.Name
             FallbackRegistry = $null
+            Skipped = $false
+        }
+    }
+
+    # 两者均连接失败（断网或受限机房）：若已有本地版本，优雅降级为离线启动
+    if (-not [string]::IsNullOrWhiteSpace($InstalledVersion) -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
+        Write-Notice ("当前网络无法连接仓库，自动启用离线模式，继续使用已安装的本地版本 {0}。" -f $InstalledVersion)
+        return [pscustomobject]@{
+            Latest = $InstalledVersion
+            Registry = $null
+            Source = '本地离线模式'
+            FallbackRegistry = $null
+            Skipped = $true
         }
     }
 
@@ -230,7 +451,7 @@ function Get-LatestNodeRelease {
 
     foreach ($source in $sources) {
         try {
-            $releases = Invoke-RestMethod -Uri $source.Index -TimeoutSec 20 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' }
+            $releases = Invoke-RestMethod -Uri $source.Index -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' }
             $release = $null
             foreach ($candidate in $releases) {
                 if ($candidate.lts -and ($candidate.files -contains $requiredFile)) {
@@ -262,9 +483,8 @@ function Get-CurlExecutable {
         return $null
     }
 
-    # 部分 Windows 10（20H1/20H2/21H1 等）自带的 curl 是 7.55.1，而
-    # --ssl-revoke-best-effort 自 curl 7.70.0 才提供。参数不被识别时 curl 会以
-    # 退出码 2 直接失败，所以这里先用 --help 探测一次，只在不支持时省略该参数。
+    # 部分 Windows 10 自带 curl 7.55.1，缺少 --ssl-revoke-best-effort。
+    # 探测一次避免传错参数直接退出码 2。
     $supportsRevokeBestEffort = $false
     try {
         $savedErrorAction = $ErrorActionPreference
@@ -291,11 +511,15 @@ function Invoke-SingleDownload {
         [string]$Destination
     )
 
-    # 先试 curl：支持 --ssl-revoke-best-effort 时带上它（可绕开 Schannel 吊销
-    # 检查失败导致的下载中断），不支持则省略该参数。
     $curl = Get-CurlExecutable
     if ($null -ne $curl) {
-        $curlArguments = @('--location', '--fail', '--silent', '--show-error', '--retry', '3', '--connect-timeout', '20')
+        $isInteractive = ($env:DSH_SETUP_NONINTERACTIVE -ne '1')
+        $curlArguments = @('--location', '--fail', '--retry', '3', '--connect-timeout', '20')
+        if ($isInteractive) {
+            $curlArguments += '--progress-bar'
+        } else {
+            $curlArguments += @('--silent', '--show-error')
+        }
         if ($curl.SupportsRevokeBestEffort) {
             $curlArguments += '--ssl-revoke-best-effort'
         }
@@ -316,7 +540,6 @@ function Invoke-SingleDownload {
         Write-Notice ("curl 下载失败（退出码 {0}），改用系统下载组件重试。" -f $curlExitCode)
     }
 
-    # curl 缺失或失败时用系统内置下载组件兜底，保证单个地址仍有机会成功。
     Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
 }
 
@@ -331,7 +554,7 @@ function Invoke-FileDownload {
             Remove-Item -LiteralPath $Destination -Force
         }
 
-        Write-Host ("  下载：{0}" -f $uri)
+        Write-Info ("正在下载：{0}" -f $uri)
         try {
             Invoke-SingleDownload -Uri $uri -Destination $Destination
 
@@ -341,11 +564,11 @@ function Invoke-FileDownload {
             }
             return
         } catch {
-            Write-Notice ("这个下载地址失败：{0}" -f $_.Exception.Message)
+            Write-Notice ("当前下载地址失败：{0}" -f $_.Exception.Message)
         }
     }
 
-    throw '所有 Node.js 下载地址都失败了，请检查网络后重试。'
+    throw '所有 Node.js 下载地址均不可用，请检查网络连接后重试。'
 }
 
 function Install-PortableNode {
@@ -363,11 +586,12 @@ function Install-PortableNode {
         "https://nodejs.org/dist/$version/$archiveName"
     )
 
-    Write-Step ("[1/3] 安装便携 Node.js {0}（{1}）" -f $version, $Architecture)
+    Write-Step ("[1/3] 下载并准备便携 Node.js {0}（{1}）" -f $version, $Architecture)
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 
     try {
         Invoke-FileDownload -Uris $downloadUris -Destination $archivePath
+        Write-Info '正在解压 Node.js 压缩包...'
         if (Test-Path -LiteralPath $stagingRoot) {
             Remove-Item -LiteralPath $stagingRoot -Recurse -Force
         }
@@ -404,7 +628,7 @@ function Install-PortableNode {
         if (Test-Path -LiteralPath $backupRoot) {
             Remove-Item -LiteralPath $backupRoot -Recurse -Force
         }
-        Write-Ok ("Node.js {0} 已就绪，版本列表来自：{1}" -f $version, $release.Name)
+        Write-Ok ("便携 Node.js {0} 安装完成（来源: {1}）" -f $version, $release.Name)
     } finally {
         if (Test-Path -LiteralPath $archivePath) {
             Remove-Item -LiteralPath $archivePath -Force
@@ -421,12 +645,12 @@ function Ensure-PortableNode {
         try {
             $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
             if ($LASTEXITCODE -eq 0 -and $version -match '^v\d+\.\d+\.\d+$') {
-                Write-Step '[1/3] 检查便携 Node.js'
-                Write-Ok ("已安装 {0}，继续使用当前便携运行时。" -f $version)
+                Write-Step '[1/3] 检查便携 Node.js 运行时'
+                Write-Ok ("已就绪便携 Node.js {0} ({1})，继续复用当前环境。" -f $version, $architecture)
                 return
             }
         } catch {
-            Write-Notice '现有便携 Node.js 无法运行，将自动修复。'
+            Write-Notice '现有便携 Node.js 无法运行，正在自动重新准备。'
         }
     }
 
@@ -539,14 +763,14 @@ function Test-DshRuntimeDependencies {
             return [pscustomobject]@{ Ok = $false; Message = "伪终端自检失败，退出码 $($ptyProbe.ExitCode)：$($ptyProbe.Output)" }
         }
 
-        return [pscustomobject]@{ Ok = $true; Message = 'Koffi 与 Windows 伪终端均可运行' }
+        return [pscustomobject]@{ Ok = $true; Message = 'Koffi 原生模块与 Windows 伪终端均运行正常' }
     } catch {
         return [pscustomobject]@{ Ok = $false; Message = $_.Exception.Message }
     }
 }
 
 function Ensure-LatestDsh {
-    Write-Step '[2/3] 检查 DeepSeek Harness 最新版本'
+    Write-Step '[2/3] 检查 DeepSeek Harness 核心组件'
 
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
     $npmConfigText = [string]::Join([Environment]::NewLine, @('fund=false', 'audit=false', 'update-notifier=false', ''))
@@ -554,39 +778,35 @@ function Ensure-LatestDsh {
 
     $installed = Get-InstalledDshVersion
     if ($null -ne $installed) {
-        Write-Host ("  当前安装版本：{0}" -f $installed)
+        Write-Info ("当前已安装版本：{0}" -f $installed)
     } else {
-        Write-Host '  当前安装版本：未安装'
+        Write-Info '当前未安装 DeepSeek Harness'
     }
 
-    $release = Get-LatestDshRelease
-    $expectedVersion = $installed
+    $release = Get-LatestDshRelease -InstalledVersion $installed
     if ($null -eq $release) {
-        if ($null -ne $installed -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-            Write-Notice ("网络检查失败，暂时继续使用已安装版本 {0}。下次运行会重新检查。" -f $installed)
-        } else {
-            throw '无法连接 npm 官方仓库或国内镜像，且本机还没有可用的 dsh。'
-        }
-    } else {
-        $expectedVersion = $release.Latest
-        Write-Host ("  官方 latest：{0}" -f $release.Latest)
-        if ($installed -eq $release.Latest -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-            Write-Ok ("已经是最新版 {0}。" -f $installed)
-        } else {
-            if ($null -eq $installed) {
-                Write-Host ("  正在通过{0}安装 {1}，首次安装可能需要几分钟……" -f $release.Source, $release.Latest)
-            } else {
-                Write-Host ("  正在通过{0}把 {1} 更新到 {2}……" -f $release.Source, $installed, $release.Latest)
-            }
+        throw '无法连接 npm 官方仓库或国内镜像，且本机暂无可用安装版本。请检查网络或代理设置。'
+    }
 
-            $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.Registry
-            if ($exitCode -ne 0 -and $release.FallbackRegistry -and $release.FallbackRegistry -ne $release.Registry) {
-                Write-Notice '国内镜像安装失败，正在改用 npm 官方仓库重试。'
-                $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.FallbackRegistry
-            }
-            if ($exitCode -ne 0) {
-                throw "npm 安装 dsh 失败，退出码：$exitCode"
-            }
+    $expectedVersion = $release.Latest
+    if ($release.Skipped) {
+        # 跳过在线更新或进入离线模式
+    } elseif ($installed -eq $release.Latest -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
+        Write-Ok ("已是最新版 {0}，无需重复下载。" -f $installed)
+    } else {
+        if ($null -eq $installed) {
+            Write-Info ("正在通过{0}安装 {1}，首次安装需拉取并配置依赖，请稍候..." -f $release.Source, $release.Latest)
+        } else {
+            Write-Info ("正在通过{0}把版本从 {1} 更新至 {2}..." -f $release.Source, $installed, $release.Latest)
+        }
+
+        $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.Registry
+        if ($exitCode -ne 0 -and $release.FallbackRegistry -and $release.FallbackRegistry -ne $release.Registry) {
+            Write-Notice '国内镜像安装遇到异常，正在改用 npm 官方仓库自动重试...'
+            $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.FallbackRegistry
+        }
+        if ($exitCode -ne 0) {
+            throw "npm 安装 dsh 失败，退出码：$exitCode"
         }
     }
 
@@ -595,7 +815,7 @@ function Ensure-LatestDsh {
         throw "安装后版本校验失败，期望 $expectedVersion，实际 $verifiedVersion"
     }
     if (-not (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-        throw "安装完成后没有找到启动文件：$DshCmd"
+        throw "未找到启动文件：$DshCmd"
     }
 
     $cliOutput = (& $DshCmd --version 2>&1 | Out-String).Trim()
@@ -611,9 +831,11 @@ function Ensure-LatestDsh {
         throw "dsh 命令版本校验失败，包版本 $verifiedVersion，命令输出 $cliVersion"
     }
 
+    # 深度自检原生依赖
+    Write-Info '正在自检 Koffi 原生模块与 Windows 伪终端...'
     $runtimeProbe = Test-DshRuntimeDependencies
     if (-not $runtimeProbe.Ok) {
-        Write-Notice ("运行依赖自检未通过，执行一次受限修复：{0}" -f $runtimeProbe.Message)
+        Write-Notice ("运行依赖自检未通过，正在尝试自动修复：{0}" -f $runtimeProbe.Message)
         $rebuildExit = Invoke-DshRebuild
         if ($rebuildExit -ne 0) {
             throw "dsh 依赖修复失败，npm 退出码：$rebuildExit"
@@ -624,7 +846,7 @@ function Ensure-LatestDsh {
         }
     }
 
-    Write-Ok ("dsh {0} 已通过命令、Koffi 与伪终端自检。" -f $verifiedVersion)
+    Write-Ok ("dsh {0} 通过命令行接口、Koffi 原生调用与 Windows 伪终端自检。" -f $verifiedVersion)
     return $verifiedVersion
 }
 
@@ -649,10 +871,10 @@ function Get-WebPort {
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $requested = 0
         if (-not [int]::TryParse($env:DSH_SETUP_PORT, [ref]$requested) -or $requested -lt 1 -or $requested -gt 65535) {
-            throw "端口参数无效：$($env:DSH_SETUP_PORT)"
+            throw "指定的端口数值无效：$($env:DSH_SETUP_PORT)"
         }
         if (-not (Test-LocalPortAvailable -Port $requested)) {
-            throw "指定端口 $requested 已被占用，请换一个端口。"
+            throw "指定端口 $requested 已被占用，请更换端口后重试。"
         }
         return $requested
     }
@@ -660,18 +882,23 @@ function Get-WebPort {
     foreach ($candidate in 3080..3099) {
         if (Test-LocalPortAvailable -Port $candidate) {
             if ($candidate -ne 3080) {
-                Write-Notice ("端口 3080 已被占用，本次自动改用 {0}。" -f $candidate)
+                Write-Notice ("默认端口 3080 已被占用，自动选择空闲端口 {0}。" -f $candidate)
             }
             return $candidate
         }
     }
 
-    throw '端口 3080 到 3099 都被占用，请关闭占用程序后重试。'
+    throw '本地端口 3080 到 3099 均被占用，请关闭占用程序后重试。'
 }
 
 function Main {
+    if ($env:DSH_SETUP_HELP -eq '1') {
+        Show-Help
+        exit 0
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_BAD_ARG)) {
-        throw "不支持的参数：$($env:DSH_SETUP_BAD_ARG)。可用参数：--install-only、--port 端口、--no-open、--no-pause。"
+        throw "不支持的参数：$($env:DSH_SETUP_BAD_ARG)。请使用 --help 查看支持的完整参数列表。"
     }
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $validatedPort = 0
@@ -681,10 +908,18 @@ function Main {
     }
 
     Set-Location -LiteralPath $SetupRoot
-    Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host '  DeepSeek Harness 一键安装器（Windows 10/11，64 位）' -ForegroundColor White
-    Write-Host '  便携安装、无需管理员、每次运行自动检查 dsh latest' -ForegroundColor White
-    Write-Host '============================================================' -ForegroundColor DarkCyan
+    Show-Banner
+
+    # 快捷方式创建指令
+    if ($env:DSH_SETUP_SHORTCUT -eq '1') {
+        Write-Step '创建桌面快捷方式'
+        $lnk = New-DesktopShortcut
+        if ($null -ne $lnk) {
+            Write-Ok ("已在桌面创建快捷方式：{0}" -f $lnk)
+        }
+        Wait-ForClose '按回车键关闭窗口...'
+        exit 0
+    }
 
     Ensure-PortableNode
     $env:PATH = "$NodeRoot;$env:PATH"
@@ -693,25 +928,19 @@ function Main {
     if ($LASTEXITCODE -ne 0) {
         throw "npm 无法运行：$npmVersion"
     }
-    Write-Host ("  npm 版本：{0}" -f $npmVersion)
+    Write-Info ("便携环境 npm 版本：{0}" -f $npmVersion)
 
     $dshVersion = Ensure-LatestDsh
 
-    Write-Step '[3/3] 准备启动网页界面'
+    Write-Step '[3/3] 准备启动网页服务'
     if ($env:DSH_SETUP_INSTALL_ONLY -eq '1') {
-        Write-Ok ("安装与校验完成，dsh 版本：{0}" -f $dshVersion)
-        Write-Host ('  启动命令："{0}" web' -f $DshCmd)
+        Write-Ok ("安装与环境校验已完成！当前 dsh 版本：{0}" -f $dshVersion)
+        Write-Info ('后续随时可手动运行："{0}" web 启动服务。' -f $DshCmd)
         return
     }
 
     $port = Get-WebPort
-    Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host ("  即将启动 DeepSeek Harness {0}" -f $dshVersion) -ForegroundColor White
-    Write-Host ("  本地地址：http://127.0.0.1:{0}" -f $port) -ForegroundColor White
-    Write-Host '  使用期间请保持此窗口开启；按 Ctrl+C 可停止服务。' -ForegroundColor White
-    Write-Host '  浏览器若未自动打开，请复制下方带 ?token= 的完整地址。' -ForegroundColor White
-    Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host ''
+    Show-Dashboard -Version $dshVersion -Port $port
 
     if ($env:DSH_SETUP_NO_OPEN -eq '1') {
         & $DshCmd web --port $port --no-open
@@ -723,16 +952,16 @@ function Main {
         throw "DeepSeek Harness 服务异常停止，退出码：$webExitCode"
     }
 
-    Write-Notice 'DeepSeek Harness 服务已经停止。'
+    Write-Notice 'DeepSeek Harness 服务已安全停止。'
 }
 
 try {
     Main
-    Wait-ForClose '按回车键关闭窗口'
+    Wait-ForClose '按回车键关闭窗口...'
     exit 0
 } catch {
     Write-Host ''
-    Write-Host ("安装器失败：{0}" -f $_.Exception.Message) -ForegroundColor Red
-    Wait-ForClose '请记录上面的错误信息，然后按回车键关闭窗口'
+    Write-Fail ("运行遇到错误：{0}" -f $_.Exception.Message)
+    Wait-ForClose '请查看上方错误信息，然后按回车键关闭窗口...'
     exit 1
 }
