@@ -161,38 +161,53 @@ $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@goog
 function Write-Step {
     param([string]$Text)
     Write-Host ''
-    Write-Host ("==> {0}" -f $Text) -ForegroundColor Cyan
+    Write-Host '  ● ' -ForegroundColor Cyan -NoNewline
+    Write-Host $Text -ForegroundColor White
 }
 
 function Write-Ok {
     param([string]$Text)
-    Write-Host '  [✓] ' -ForegroundColor Green -NoNewline
+    Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '[✓] ' -ForegroundColor Green -NoNewline
     Write-Host $Text -ForegroundColor White
 }
 
 function Write-Info {
     param([string]$Text)
-    Write-Host '  [i] ' -ForegroundColor Cyan -NoNewline
+    Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '[i] ' -ForegroundColor Cyan -NoNewline
     Write-Host $Text -ForegroundColor Gray
 }
 
 function Write-Notice {
     param([string]$Text)
-    Write-Host '  [!] ' -ForegroundColor Yellow -NoNewline
+    Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '[!] ' -ForegroundColor Yellow -NoNewline
     Write-Host $Text -ForegroundColor Yellow
 }
 
 function Write-Fail {
     param([string]$Text)
-    Write-Host '  [×] ' -ForegroundColor Red -NoNewline
+    Write-Host '    └─ ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '[×] ' -ForegroundColor Red -NoNewline
     Write-Host $Text -ForegroundColor Red
 }
 
 function Show-Banner {
-    Write-Host '========================================================================' -ForegroundColor DarkCyan
-    Write-Host '                   DeepSeek Harness 一键部署管理器                      ' -ForegroundColor Cyan
-    Write-Host '       便携运行环境 · 自动镜像加速 · 完整环境自检 · 极速启动            ' -ForegroundColor Gray
-    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host ''
+    $logo = @'
+    ____                  ____            _    
+   |  _ \  ___  ___ _ __ / ___|  ___  ___| | __
+   | | | |/ _ \/ _ \ '_ \ \___ \ / _ \/ _ \ |/ /
+   | |_| |  __/  __/ |_) |___) |  __/  __/   < 
+   |____/ \___|\___| .__/ |____/ \___|\___|_|\_\
+                   |_|   H A R N E S S         
+'@
+    Write-Host $logo -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host '  ┌─ 一键部署管理器 ──────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host '  │  便携运行环境 · 自动镜像加速 · 完整依赖自检 · 极速启动' -ForegroundColor Gray
+    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
 }
 
 function Show-Dashboard {
@@ -201,37 +216,39 @@ function Show-Dashboard {
         [int]$Port
     )
     Write-Host ''
-    Write-Host '========================================================================' -ForegroundColor DarkCyan
-    Write-Host '  DeepSeek Harness 网页服务启动成功！' -ForegroundColor Green
-    Write-Host ("  · 运行版本: {0}" -f $Version) -ForegroundColor Gray
-    Write-Host '  · 本地访问: ' -ForegroundColor Gray -NoNewline
+    Write-Host '  ┌───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host '[✓] DeepSeek Harness 网页服务已就绪！' -ForegroundColor Green
+    Write-Host '  │' -ForegroundColor DarkCyan
+    Write-Host '  │  ➜ 本地访问:  ' -ForegroundColor Gray -NoNewline
     Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
-    Write-Host ''
-    Write-Host '  使用提示:' -ForegroundColor White
-    Write-Host '  1. 系统将自动尝试在默认浏览器中打开该页面' -ForegroundColor Gray
-    Write-Host '  2. 浏览器若未自动弹出，请复制控制台下方包含 ?token= 的完整链接' -ForegroundColor Gray
-    Write-Host '  3. 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' -ForegroundColor Gray
-    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host '  │  ➜ 核心版本:  ' -ForegroundColor Gray -NoNewline
+    Write-Host ("v{0} (便携运行时)" -f $Version) -ForegroundColor White
+    Write-Host '  │' -ForegroundColor DarkCyan
+    Write-Host '  │  使用提示:' -ForegroundColor Yellow
+    Write-Host '  │  · 系统将自动尝试在默认浏览器中打开该页面' -ForegroundColor Gray
+    Write-Host '  │  · 若未自动弹出，请复制下方日志中包含 ?token= 的完整链接' -ForegroundColor Gray
+    Write-Host '  │  · 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' -ForegroundColor Gray
+    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
 function Show-Help {
     Write-Host ''
-    Write-Host 'DeepSeek Harness 一键部署器 - 命令参数说明' -ForegroundColor Cyan
-    Write-Host '========================================================================' -ForegroundColor DarkCyan
-    Write-Host '  用法: dsh-setup.bat [选项]' -ForegroundColor White
-    Write-Host ''
-    Write-Host '  选项列表:' -ForegroundColor White
-    Write-Host '    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' -ForegroundColor Gray
-    Write-Host '    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' -ForegroundColor Gray
-    Write-Host '    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' -ForegroundColor Gray
-    Write-Host '    --clean, --reset      清理并重置便携运行时目录（dsh-runtime）' -ForegroundColor Gray
-    Write-Host '    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' -ForegroundColor Gray
-    Write-Host '    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' -ForegroundColor Gray
-    Write-Host '    --no-open             启动服务后不自动调用浏览器打开网页' -ForegroundColor Gray
-    Write-Host '    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' -ForegroundColor Gray
-    Write-Host '    --help, -h            显示此帮助信息' -ForegroundColor Gray
-    Write-Host '========================================================================' -ForegroundColor DarkCyan
+    Write-Host '  ┌─ 命令参数说明 ────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host '  │  用法: dsh-setup.bat [选项]' -ForegroundColor White
+    Write-Host '  │' -ForegroundColor DarkCyan
+    Write-Host '  │  选项列表:' -ForegroundColor Cyan
+    Write-Host '  │    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' -ForegroundColor Gray
+    Write-Host '  │    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' -ForegroundColor Gray
+    Write-Host '  │    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' -ForegroundColor Gray
+    Write-Host '  │    --clean, --reset      清理并重置便携运行时目录（dsh-runtime）' -ForegroundColor Gray
+    Write-Host '  │    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' -ForegroundColor Gray
+    Write-Host '  │    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' -ForegroundColor Gray
+    Write-Host '  │    --no-open             启动服务后不自动调用浏览器打开网页' -ForegroundColor Gray
+    Write-Host '  │    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' -ForegroundColor Gray
+    Write-Host '  │    --help, -h            显示此帮助信息' -ForegroundColor Gray
+    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
