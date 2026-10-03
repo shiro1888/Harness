@@ -1,0 +1,8 @@
+# DeepSeek Harness 便携运行时与安装缓存
+dsh-runtime/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.node-install-*
+.node-backup-*
+*.download

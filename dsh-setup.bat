@@ -6,6 +6,8 @@ set "DSH_SETUP_INSTALL_ONLY="
 set "DSH_SETUP_NONINTERACTIVE="
 set "DSH_SETUP_NO_OPEN="
 set "DSH_SETUP_FAST="
+set "DSH_SETUP_REINSTALL="
+set "DSH_SETUP_CLEAN="
 set "DSH_SETUP_SHORTCUT="
 set "DSH_SETUP_HELP="
 set "DSH_SETUP_PORT="
@@ -35,6 +37,26 @@ if /I "%~1"=="--fast" (
 )
 if /I "%~1"=="--skip-check" (
     set "DSH_SETUP_FAST=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--reinstall" (
+    set "DSH_SETUP_REINSTALL=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--update" (
+    set "DSH_SETUP_REINSTALL=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--clean" (
+    set "DSH_SETUP_CLEAN=1"
+    shift
+    goto parse_arguments
+)
+if /I "%~1"=="--reset" (
+    set "DSH_SETUP_CLEAN=1"
     shift
     goto parse_arguments
 )
@@ -202,10 +224,12 @@ function Show-Help {
     Write-Host '  选项列表:' -ForegroundColor White
     Write-Host '    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' -ForegroundColor Gray
     Write-Host '    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' -ForegroundColor Gray
+    Write-Host '    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' -ForegroundColor Gray
+    Write-Host '    --clean, --reset      清理并重置便携运行时目录（dsh-runtime）' -ForegroundColor Gray
+    Write-Host '    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' -ForegroundColor Gray
     Write-Host '    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' -ForegroundColor Gray
     Write-Host '    --no-open             启动服务后不自动调用浏览器打开网页' -ForegroundColor Gray
     Write-Host '    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' -ForegroundColor Gray
-    Write-Host '    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' -ForegroundColor Gray
     Write-Host '    --help, -h            显示此帮助信息' -ForegroundColor Gray
     Write-Host '========================================================================' -ForegroundColor DarkCyan
     Write-Host ''
@@ -225,12 +249,18 @@ function Wait-ForClose {
 }
 
 function New-DesktopShortcut {
+    param(
+        [string]$Arguments = ""
+    )
     try {
         $desktop = [Environment]::GetFolderPath('Desktop')
         $shortcutPath = Join-Path $desktop 'DeepSeek Harness.lnk'
         $wsh = New-Object -ComObject WScript.Shell
         $shortcut = $wsh.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = $SetupPath
+        if (-not [string]::IsNullOrWhiteSpace($Arguments)) {
+            $shortcut.Arguments = $Arguments
+        }
         $shortcut.WorkingDirectory = $SetupRoot
         $shortcut.Description = 'DeepSeek Harness 一键启动'
         if (Test-Path -LiteralPath $NodeExe -PathType Leaf) {
@@ -301,7 +331,17 @@ function Invoke-ParallelRegistryQuery {
 
     try {
         Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
-        $client = New-Object System.Net.Http.HttpClient
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        $proxyUri = $env:HTTPS_PROXY
+        if ([string]::IsNullOrWhiteSpace($proxyUri)) { $proxyUri = $env:HTTP_PROXY }
+        if ([string]::IsNullOrWhiteSpace($proxyUri)) { $proxyUri = $env:ALL_PROXY }
+        if (-not [string]::IsNullOrWhiteSpace($proxyUri)) {
+            try {
+                $handler.Proxy = New-Object System.Net.WebProxy($proxyUri)
+                $handler.UseProxy = $true
+            } catch {}
+        }
+        $client = New-Object System.Net.Http.HttpClient($handler)
         $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
         $client.DefaultRequestHeaders.Add('User-Agent', 'deepseek-harness-windows-installer')
         $client.DefaultRequestHeaders.Add('Accept', 'application/vnd.npm.install-v1+json')
@@ -807,12 +847,15 @@ function Ensure-LatestDsh {
     }
 
     $expectedVersion = $release.Latest
-    if ($release.Skipped) {
+    $forceReinstall = ($env:DSH_SETUP_REINSTALL -eq '1')
+    if ($release.Skipped -and -not $forceReinstall) {
         # 跳过在线更新或进入离线模式
-    } elseif ($installed -eq $release.Latest -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
+    } elseif ($installed -eq $release.Latest -and (Test-Path -LiteralPath $DshCmd -PathType Leaf) -and -not $forceReinstall) {
         Write-Ok ("已是最新版 {0}，无需重复下载。" -f $installed)
     } else {
-        if ($null -eq $installed) {
+        if ($forceReinstall -and ($installed -eq $release.Latest)) {
+            Write-Info ("强制重装模式：正在重新部署当前最新版本 {0}..." -f $release.Latest)
+        } elseif ($null -eq $installed) {
             Write-Info ("正在通过{0}安装 {1}，首次安装需拉取并配置依赖，请稍候..." -f $release.Source, $release.Latest)
         } else {
             Write-Info ("正在通过{0}把版本从 {1} 更新至 {2}..." -f $release.Source, $installed, $release.Latest)
@@ -928,12 +971,32 @@ function Main {
     Set-Location -LiteralPath $SetupRoot
     Show-Banner
 
+    # 清理重置便携运行时指令
+    if ($env:DSH_SETUP_CLEAN -eq '1') {
+        Write-Step '清理便携运行时环境'
+        if (Test-Path -LiteralPath $RuntimeRoot) {
+            Write-Info ("正在清理目录：{0}..." -f $RuntimeRoot)
+            try {
+                Remove-Item -LiteralPath $RuntimeRoot -Recurse -Force
+                Write-Ok '便携运行时已彻底清理完成。下次运行将重新进行全新部署。'
+            } catch {
+                Write-Fail ("清理失败（请先确保关闭正在运行的 DeepSeek Harness 窗口与服务）：{0}" -f $_.Exception.Message)
+            }
+        } else {
+            Write-Ok '便携运行时目录不存在，无需清理。'
+        }
+        Wait-ForClose '按回车键关闭窗口...'
+        exit 0
+    }
+
     # 快捷方式创建指令
     if ($env:DSH_SETUP_SHORTCUT -eq '1') {
         Write-Step '创建桌面快捷方式'
-        $lnk = New-DesktopShortcut
+        $shortcutArgs = if ($env:DSH_SETUP_FAST -eq '1') { '--fast' } else { '' }
+        $lnk = New-DesktopShortcut -Arguments $shortcutArgs
         if ($null -ne $lnk) {
-            Write-Ok ("已在桌面创建快捷方式：{0}" -f $lnk)
+            $modeDesc = if ($env:DSH_SETUP_FAST -eq '1') { '（包含 --fast 极速启动参数）' } else { '' }
+            Write-Ok ("已在桌面创建快捷方式{0}：{1}" -f $modeDesc, $lnk)
         }
         Wait-ForClose '按回车键关闭窗口...'
         exit 0
