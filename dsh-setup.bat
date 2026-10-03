@@ -158,6 +158,40 @@ $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@goog
 # ============================
 # UI 美化与提示函数
 # ============================
+function Get-DisplayWidth {
+    param([string]$Text)
+    $w = 0
+    foreach ($ch in $Text.ToCharArray()) {
+        if ([int]$ch -gt 127) { $w += 2 } else { $w += 1 }
+    }
+    return $w
+}
+
+function Format-ElapsedText {
+    param([int]$Milliseconds)
+    if ($Milliseconds -ge 1000) {
+        return ("{0:N1}s" -f ($Milliseconds / 1000))
+    }
+    return ("{0}ms" -f $Milliseconds)
+}
+
+function Write-TimedLine {
+    param(
+        [string]$Prefix,
+        [string]$Title,
+        [int]$ElapsedMs,
+        [int]$TargetWidth = 62
+    )
+    $fullTitle = "$Prefix$Title"
+    $w = Get-DisplayWidth $fullTitle
+    $dots = "." * [Math]::Max(3, ($TargetWidth - $w))
+    $timeText = Format-ElapsedText $ElapsedMs
+    Write-Host $Prefix -ForegroundColor Cyan -NoNewline
+    Write-Host $Title -ForegroundColor White -NoNewline
+    Write-Host " $dots " -ForegroundColor DarkGray -NoNewline
+    Write-Host "[✓ $timeText]" -ForegroundColor Green
+}
+
 function Write-Step {
     param([string]$Text)
     Write-Host ''
@@ -191,6 +225,28 @@ function Write-Fail {
     Write-Host '    └─ ' -ForegroundColor DarkGray -NoNewline
     Write-Host '[×] ' -ForegroundColor Red -NoNewline
     Write-Host $Text -ForegroundColor Red
+}
+
+function Show-StatusCard {
+    param(
+        [string]$Arch,
+        [string]$NodeVer,
+        [string]$DshVer,
+        [string]$MirrorSource
+    )
+    Write-Host '  ┌─ 运行状态看板 ──────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host '架构平台: ' -ForegroundColor Gray -NoNewline
+    Write-Host ("Windows ({0})" -f $Arch).PadRight(22) -ForegroundColor White -NoNewline
+    Write-Host '便携运行时: ' -ForegroundColor Gray -NoNewline
+    Write-Host ("Node.js {0}" -f $NodeVer) -ForegroundColor White
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host '核心版本: ' -ForegroundColor Gray -NoNewline
+    Write-Host ("v{0}" -f $DshVer).PadRight(22) -ForegroundColor Cyan -NoNewline
+    Write-Host '镜像加速:   ' -ForegroundColor Gray -NoNewline
+    Write-Host ("{0}" -f $MirrorSource) -ForegroundColor Green
+    Write-Host '  └─────────────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host ''
 }
 
 function Show-Banner {
@@ -715,14 +771,15 @@ function Install-PortableNode {
 }
 
 function Ensure-PortableNode {
+    $swNode = [Diagnostics.Stopwatch]::StartNew()
     $architecture = Get-MachineArchitecture
     if ((Test-Path -LiteralPath $NodeExe -PathType Leaf) -and (Test-Path -LiteralPath $NpmCmd -PathType Leaf)) {
         try {
             $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
             if ($LASTEXITCODE -eq 0 -and $version -match '^v\d+\.\d+\.\d+$') {
-                Write-Step '[1/3] 检查便携 Node.js 运行时'
-                Write-Ok ("已就绪便携 Node.js {0} ({1})，继续复用当前环境。" -f $version, $architecture)
-                return
+                $swNode.Stop()
+                Write-TimedLine -Prefix "  ● [1/3] " -Title ("便携 Node.js 运行时就绪 ({0} {1})" -f $version, $architecture) -ElapsedMs $swNode.ElapsedMilliseconds
+                return [pscustomobject]@{ Version = $version; Architecture = $architecture }
             }
         } catch {
             Write-Notice '现有便携 Node.js 无法运行，正在自动重新准备。'
@@ -730,6 +787,10 @@ function Ensure-PortableNode {
     }
 
     Install-PortableNode -Architecture $architecture
+    $swNode.Stop()
+    $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
+    Write-TimedLine -Prefix "  ● [1/3] " -Title ("便携 Node.js 安装部署完成 ({0} {1})" -f $version, $architecture) -ElapsedMs $swNode.ElapsedMilliseconds
+    return [pscustomobject]@{ Version = $version; Architecture = $architecture }
 }
 
 function Invoke-NpmWithOutput {
@@ -845,22 +906,24 @@ function Test-DshRuntimeDependencies {
 }
 
 function Ensure-LatestDsh {
-    Write-Step '[2/3] 检查 DeepSeek Harness 核心组件'
+    $swDsh = [Diagnostics.Stopwatch]::StartNew()
 
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
     $npmConfigText = [string]::Join([Environment]::NewLine, @('fund=false', 'audit=false', 'update-notifier=false', ''))
     [IO.File]::WriteAllText($NpmConfig, $npmConfigText, $utf8)
 
     $installed = Get-InstalledDshVersion
-    if ($null -ne $installed) {
-        Write-Info ("当前已安装版本：{0}" -f $installed)
-    } else {
-        Write-Info '当前未安装 DeepSeek Harness'
-    }
 
+    $swNet = [Diagnostics.Stopwatch]::StartNew()
     $release = Get-LatestDshRelease -InstalledVersion $installed
+    $swNet.Stop()
+
     if ($null -eq $release) {
         throw '无法连接 npm 官方仓库或国内镜像，且本机暂无可用安装版本。请检查网络或代理设置。'
+    }
+
+    if (-not $release.Skipped) {
+        Write-TimedLine -Prefix "    ├─ " -Title "npm 官方与国内镜像并发竞速" -ElapsedMs $swNet.ElapsedMilliseconds
     }
 
     $expectedVersion = $release.Latest
@@ -868,7 +931,7 @@ function Ensure-LatestDsh {
     if ($release.Skipped -and -not $forceReinstall) {
         # 跳过在线更新或进入离线模式
     } elseif ($installed -eq $release.Latest -and (Test-Path -LiteralPath $DshCmd -PathType Leaf) -and -not $forceReinstall) {
-        Write-Ok ("已是最新版 {0}，无需重复下载。" -f $installed)
+        # 已是最新版
     } else {
         if ($forceReinstall -and ($installed -eq $release.Latest)) {
             Write-Info ("强制重装模式：正在重新部署当前最新版本 {0}..." -f $release.Latest)
@@ -878,14 +941,17 @@ function Ensure-LatestDsh {
             Write-Info ("正在通过{0}把版本从 {1} 更新至 {2}..." -f $release.Source, $installed, $release.Latest)
         }
 
+        $swInstall = [Diagnostics.Stopwatch]::StartNew()
         $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.Registry
         if ($exitCode -ne 0 -and $release.FallbackRegistry -and $release.FallbackRegistry -ne $release.Registry) {
             Write-Notice '国内镜像安装遇到异常，正在改用 npm 官方仓库自动重试...'
             $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.FallbackRegistry
         }
+        $swInstall.Stop()
         if ($exitCode -ne 0) {
             throw "npm 安装 dsh 失败，退出码：$exitCode"
         }
+        Write-TimedLine -Prefix "    ├─ " -Title ("拉取并安装核心组件 (v{0})" -f $release.Latest) -ElapsedMs $swInstall.ElapsedMilliseconds
     }
 
     $verifiedVersion = Get-InstalledDshVersion
@@ -910,7 +976,7 @@ function Ensure-LatestDsh {
     }
 
     # 深度自检原生依赖
-    Write-Info '正在自检 Koffi 原生模块与 Windows 伪终端...'
+    $swProbe = [Diagnostics.Stopwatch]::StartNew()
     $runtimeProbe = Test-DshRuntimeDependencies
     if (-not $runtimeProbe.Ok) {
         Write-Notice ("运行依赖自检未通过，正在尝试自动修复：{0}" -f $runtimeProbe.Message)
@@ -923,9 +989,16 @@ function Ensure-LatestDsh {
             throw "dsh 依赖修复后仍未通过自检：$($runtimeProbe.Message)"
         }
     }
+    $swProbe.Stop()
+    Write-TimedLine -Prefix "    └─ " -Title "Koffi 原生模块与 Windows 伪终端自检" -ElapsedMs $swProbe.ElapsedMilliseconds
 
-    Write-Ok ("dsh {0} 通过命令行接口、Koffi 原生调用与 Windows 伪终端自检。" -f $verifiedVersion)
-    return $verifiedVersion
+    $swDsh.Stop()
+    Write-TimedLine -Prefix "  ● [2/3] " -Title ("DeepSeek Harness 核心组件就绪 (v{0})" -f $verifiedVersion) -ElapsedMs $swDsh.ElapsedMilliseconds
+
+    return [pscustomobject]@{
+        Version = $verifiedVersion
+        Source  = if ($release.Skipped) { '离线模式' } else { $release.Source }
+    }
 }
 
 function Test-LocalPortAvailable {
@@ -1019,25 +1092,32 @@ function Main {
         exit 0
     }
 
-    Ensure-PortableNode
+    $nodeMeta = Ensure-PortableNode
     $env:PATH = "$NodeRoot;$env:PATH"
 
     $npmVersion = (& $NpmCmd --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         throw "npm 无法运行：$npmVersion"
     }
-    Write-Info ("便携环境 npm 版本：{0}" -f $npmVersion)
 
-    $dshVersion = Ensure-LatestDsh
+    $dshMeta = Ensure-LatestDsh
+    $dshVersion = $dshMeta.Version
 
-    Write-Step '[3/3] 准备启动网页服务'
     if ($env:DSH_SETUP_INSTALL_ONLY -eq '1') {
-        Write-Ok ("安装与环境校验已完成！当前 dsh 版本：{0}" -f $dshVersion)
+        Write-TimedLine -Prefix "  ● [3/3] " -Title "安装校验模式完成（不启动网页服务）" -ElapsedMs 0
+        Write-Host ''
+        Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
         Write-Info ('后续随时可手动运行："{0}" web 启动服务。' -f $DshCmd)
         return
     }
 
+    $swPort = [Diagnostics.Stopwatch]::StartNew()
     $port = Get-WebPort
+    $swPort.Stop()
+    Write-TimedLine -Prefix "  ● [3/3] " -Title ("本地 Web 服务端口就绪 (Port {0})" -f $port) -ElapsedMs $swPort.ElapsedMilliseconds
+
+    Write-Host ''
+    Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
     Show-Dashboard -Version $dshVersion -Port $port
 
     if ($env:DSH_SETUP_NO_OPEN -eq '1') {
