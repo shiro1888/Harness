@@ -16,73 +16,21 @@ set "DSH_SETUP_BAD_ARG="
 
 :parse_arguments
 if "%~1"=="" goto run_installer
-if /I "%~1"=="--install-only" (
-    set "DSH_SETUP_INSTALL_ONLY=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--no-pause" (
-    set "DSH_SETUP_NONINTERACTIVE=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--no-open" (
-    set "DSH_SETUP_NO_OPEN=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--fast" (
-    set "DSH_SETUP_FAST=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--skip-check" (
-    set "DSH_SETUP_FAST=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--reinstall" (
-    set "DSH_SETUP_REINSTALL=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--update" (
-    set "DSH_SETUP_REINSTALL=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--clean" (
-    set "DSH_SETUP_CLEAN=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--reset" (
-    set "DSH_SETUP_CLEAN=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--create-shortcut" (
-    set "DSH_SETUP_SHORTCUT=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--shortcut" (
-    set "DSH_SETUP_SHORTCUT=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--help" (
-    set "DSH_SETUP_HELP=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="-h" (
-    set "DSH_SETUP_HELP=1"
-    shift
-    goto parse_arguments
-)
-if /I "%~1"=="--port" goto parse_port
-if /I "%~1"=="--lang" goto parse_lang
+if /I "%~1"=="--install-only"    set "DSH_SETUP_INSTALL_ONLY=1" & shift & goto parse_arguments
+if /I "%~1"=="--no-pause"        set "DSH_SETUP_NONINTERACTIVE=1" & shift & goto parse_arguments
+if /I "%~1"=="--no-open"         set "DSH_SETUP_NO_OPEN=1" & shift & goto parse_arguments
+if /I "%~1"=="--fast"            set "DSH_SETUP_FAST=1" & shift & goto parse_arguments
+if /I "%~1"=="--skip-check"      set "DSH_SETUP_FAST=1" & shift & goto parse_arguments
+if /I "%~1"=="--reinstall"       set "DSH_SETUP_REINSTALL=1" & shift & goto parse_arguments
+if /I "%~1"=="--update"          set "DSH_SETUP_REINSTALL=1" & shift & goto parse_arguments
+if /I "%~1"=="--clean"           set "DSH_SETUP_CLEAN=1" & shift & goto parse_arguments
+if /I "%~1"=="--reset"           set "DSH_SETUP_CLEAN=1" & shift & goto parse_arguments
+if /I "%~1"=="--create-shortcut" set "DSH_SETUP_SHORTCUT=1" & shift & goto parse_arguments
+if /I "%~1"=="--shortcut"        set "DSH_SETUP_SHORTCUT=1" & shift & goto parse_arguments
+if /I "%~1"=="--help"            set "DSH_SETUP_HELP=1" & shift & goto parse_arguments
+if /I "%~1"=="-h"                set "DSH_SETUP_HELP=1" & shift & goto parse_arguments
+if /I "%~1"=="--port"            goto parse_port
+if /I "%~1"=="--lang"            goto parse_lang
 if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
 shift
 goto parse_arguments
@@ -525,7 +473,7 @@ function New-DesktopShortcut {
         [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
         return $shortcutPath
     } catch {
-        Write-Notice ("创建桌面快捷方式失败：{0}" -f $_.Exception.Message)
+        Write-Notice (T ("创建桌面快捷方式失败：{0}" -f $_.Exception.Message) ("Failed to create desktop shortcut: {0}" -f $_.Exception.Message))
         return $null
     }
 }
@@ -543,34 +491,6 @@ function Get-MachineArchitecture {
         'AMD64' { return 'x64' }
         'ARM64' { return 'arm64' }
         default { throw "暂不支持此 Windows 架构：$value。需要 64 位 x64 或 ARM64。" }
-    }
-}
-
-function Invoke-RegistryMetadata {
-    param(
-        [string]$Registry,
-        [string]$Name,
-        [int]$TimeoutSec = 8
-    )
-
-    $uri = "$Registry/@deepseek-ai%2Fdsh"
-    try {
-        $headers = @{
-            Accept = 'application/vnd.npm.install-v1+json'
-            'User-Agent' = 'deepseek-harness-windows-installer'
-        }
-        $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec $TimeoutSec
-        $latest = [string]$metadata.'dist-tags'.latest
-        if ([string]::IsNullOrWhiteSpace($latest)) {
-            throw '没有找到 latest 标签'
-        }
-        return [pscustomobject]@{
-            Name = $Name
-            Registry = $Registry
-            Latest = $latest
-        }
-    } catch {
-        return $null
     }
 }
 
@@ -648,9 +568,17 @@ function Invoke-ParallelRegistryQuery {
             } catch {}
         }
     } catch {
-        # 异步客户端不可用时，优雅回退到逐个查询
-        $officialRes = Invoke-RegistryMetadata -Registry $OfficialRegistry -Name 'npm 官方仓库' -TimeoutSec 5
-        $mirrorRes = Invoke-RegistryMetadata -Registry $MirrorRegistry -Name '国内 npm 镜像' -TimeoutSec 5
+        # 异常情况下安全回退到 Invoke-RestMethod
+        foreach ($target in @(@($OfficialRegistry, 'npm 官方仓库'), @($MirrorRegistry, '国内 npm 镜像'))) {
+            try {
+                $meta = Invoke-RestMethod -Uri "$($target[0])/@deepseek-ai%2Fdsh" -TimeoutSec 5 -Headers @{ Accept = 'application/vnd.npm.install-v1+json' }
+                $lat = [string]$meta.'dist-tags'.latest
+                if (-not [string]::IsNullOrWhiteSpace($lat)) {
+                    $obj = [pscustomobject]@{ Name = $target[1]; Registry = $target[0]; Latest = $lat }
+                    if ($target[0] -eq $OfficialRegistry) { $officialRes = $obj } else { $mirrorRes = $obj }
+                }
+            } catch {}
+        }
     } finally {
         if ($null -ne $client) {
             try { $client.Dispose() } catch {}
@@ -1339,11 +1267,11 @@ function Main {
 
 try {
     Main
-    Wait-ForClose '按回车键关闭窗口...'
+    Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
     exit 0
 } catch {
     Write-Host ''
-    Write-Fail ("运行遇到错误：{0}" -f $_.Exception.Message)
-    Wait-ForClose '请查看上方错误信息，然后按回车键关闭窗口...'
+    Write-Fail (T ("运行遇到错误：{0}" -f $_.Exception.Message) ("Execution error: {0}" -f $_.Exception.Message))
+    Wait-ForClose (T '请查看上方错误信息，然后按回车键关闭窗口...' 'Please check error message above, then press Enter to exit...')
     exit 1
 }
