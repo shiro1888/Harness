@@ -11,6 +11,7 @@ set "DSH_SETUP_CLEAN="
 set "DSH_SETUP_SHORTCUT="
 set "DSH_SETUP_HELP="
 set "DSH_SETUP_PORT="
+set "DSH_SETUP_LANG="
 set "DSH_SETUP_BAD_ARG="
 
 :parse_arguments
@@ -81,6 +82,7 @@ if /I "%~1"=="-h" (
     goto parse_arguments
 )
 if /I "%~1"=="--port" goto parse_port
+if /I "%~1"=="--lang" goto parse_lang
 if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
 shift
 goto parse_arguments
@@ -92,6 +94,17 @@ if "%~2"=="" (
     goto parse_arguments
 )
 set "DSH_SETUP_PORT=%~2"
+shift
+shift
+goto parse_arguments
+
+:parse_lang
+if "%~2"=="" (
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--lang 缺少语言选项 (zh/en)"
+    shift
+    goto parse_arguments
+)
+set "DSH_SETUP_LANG=%~2"
 shift
 shift
 goto parse_arguments
@@ -154,6 +167,25 @@ $NpmConfig = Join-Path $RuntimeRoot 'installer.npmrc'
 $NpmCache = Join-Path $RuntimeRoot 'npm-cache'
 $FallbackNodeVersion = 'v24.21.0'
 $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
+
+# ============================
+# 国际化语言自适应与文本辅助
+# ============================
+$Global:IsEnglish = ($env:DSH_SETUP_LANG -eq 'en')
+if (-not $Global:IsEnglish -and [string]::IsNullOrWhiteSpace($env:DSH_SETUP_LANG)) {
+    try {
+        $sysLang = [System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName
+        if ($sysLang -ne 'zh') {
+            $Global:IsEnglish = $true
+        }
+    } catch {}
+}
+
+function T {
+    param([string]$Zh, [string]$En)
+    if ($Global:IsEnglish) { return $En }
+    return $Zh
+}
 
 # ============================
 # UI 美化与提示函数
@@ -227,6 +259,108 @@ function Write-Fail {
     Write-Host $Text -ForegroundColor Red
 }
 
+function Test-VcRedistInstalled {
+    $paths = @(
+        (Join-Path $env:SystemRoot "System32\vcruntime140.dll"),
+        (Join-Path $env:SystemRoot "SysWOW64\vcruntime140.dll")
+    )
+    foreach ($p in $paths) {
+        if (Test-Path -LiteralPath $p -PathType Leaf) { return $true }
+    }
+    $regKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64",
+        "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x86",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+    )
+    foreach ($k in $regKeys) {
+        if (Test-Path -LiteralPath $k) { return $true }
+    }
+    return $false
+}
+
+function Show-QuickActionMenu {
+    if ($env:DSH_SETUP_NONINTERACTIVE -eq '1') { return $null }
+    try {
+        if ([Console]::IsInputRedirected) { return $null }
+    } catch { return $null }
+
+    if ($env:DSH_SETUP_FAST -eq '1' -or $env:DSH_SETUP_REINSTALL -eq '1' -or $env:DSH_SETUP_CLEAN -eq '1' -or $env:DSH_SETUP_SHORTCUT -eq '1' -or $env:DSH_SETUP_INSTALL_ONLY -eq '1') {
+        return $null
+    }
+
+    Write-Host (T '  ┌─ 快捷操作面板 ──────────────────────────────────────────────────────' '  ┌─ Quick Action Panel ────────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  │  [Enter] 正常启动      [F] 极速秒启      [R] 强制重装' '  │  [Enter] Start Normal   [F] Fast Launch   [R] Force Reinstall') -ForegroundColor Gray
+    Write-Host (T '  │  [C]     清理重置      [S] 创建快捷方式  [H] 命令帮助' '  │  [C]     Clean/Reset    [S] Shortcut      [H] Help Manual') -ForegroundColor Gray
+    Write-Host '  │' -ForegroundColor DarkCyan
+
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $selectedKey = $null
+    $lastSec = -1
+
+    while ($sw.Elapsed.TotalSeconds -lt 3) {
+        $remaining = [Math]::Ceiling(3 - $sw.Elapsed.TotalSeconds)
+        if ($remaining -ne $lastSec) {
+            $lastSec = $remaining
+            $msg = if ($Global:IsEnglish) {
+                "`r  │  Auto-starting in {0}s... [ {0}s ] " -f $remaining
+            } else {
+                "`r  │  倒计时 {0} 秒自动启动... [ {0}s ] " -f $remaining
+            }
+            Write-Host -NoNewline $msg
+        }
+        try {
+            if ([Console]::KeyAvailable) {
+                $keyInfo = [Console]::ReadKey($true)
+                $selectedKey = [string]$keyInfo.KeyChar
+                break
+            }
+        } catch { break }
+        Start-Sleep -Milliseconds 60
+    }
+    $doneMsg = if ($Global:IsEnglish) { "`r  │  Starting...                                    " } else { "`r  │  启动中...                                      " }
+    Write-Host $doneMsg -ForegroundColor DarkCyan
+    Write-Host '  └─────────────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host ''
+
+    return $selectedKey
+}
+
+function Start-WebHeartbeatPing {
+    param([int]$Port)
+    try {
+        $rs = [RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $ps = [PowerShell]::Create()
+        $ps.Runspace = $rs
+        $null = $ps.AddScript({
+            param($p, $isEn)
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            while ($sw.Elapsed.TotalSeconds -lt 15) {
+                Start-Sleep -Milliseconds 600
+                try {
+                    $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$p/")
+                    $req.Timeout = 1000
+                    $resp = $req.GetResponse()
+                    if ($null -ne $resp) {
+                        $resp.Close()
+                        Write-Host ''
+                        Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+                        Write-Host '[✓] ' -ForegroundColor Green -NoNewline
+                        $msg = if ($isEn) {
+                            ("Web heartbeat alive, local HTTP responded in {0:N1}s." -f $sw.Elapsed.TotalSeconds)
+                        } else {
+                            ("Web 服务活跃心跳正常，已成功响应本地 HTTP 请求 (耗时 {0:N1}s)。" -f $sw.Elapsed.TotalSeconds)
+                        }
+                        Write-Host $msg -ForegroundColor White
+                        break
+                    }
+                } catch {}
+            }
+        }).AddArgument($Port).AddArgument($Global:IsEnglish)
+        $null = $ps.BeginInvoke()
+    } catch {}
+}
+
 function Show-StatusCard {
     param(
         [string]$Arch,
@@ -234,16 +368,16 @@ function Show-StatusCard {
         [string]$DshVer,
         [string]$MirrorSource
     )
-    Write-Host '  ┌─ 运行状态看板 ──────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host (T '  ┌─ 运行状态看板 ──────────────────────────────────────────────────────' '  ┌─ Runtime Status Matrix ─────────────────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host '架构平台: ' -ForegroundColor Gray -NoNewline
+    Write-Host (T '架构平台: ' 'Platform:   ') -ForegroundColor Gray -NoNewline
     Write-Host ("Windows ({0})" -f $Arch).PadRight(22) -ForegroundColor White -NoNewline
-    Write-Host '便携运行时: ' -ForegroundColor Gray -NoNewline
+    Write-Host (T '便携运行时: ' 'Runtime:    ') -ForegroundColor Gray -NoNewline
     Write-Host ("Node.js {0}" -f $NodeVer) -ForegroundColor White
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host '核心版本: ' -ForegroundColor Gray -NoNewline
+    Write-Host (T '核心版本: ' 'Version:    ') -ForegroundColor Gray -NoNewline
     Write-Host ("v{0}" -f $DshVer).PadRight(22) -ForegroundColor Cyan -NoNewline
-    Write-Host '镜像加速:   ' -ForegroundColor Gray -NoNewline
+    Write-Host (T '镜像加速:   ' 'Mirror:     ') -ForegroundColor Gray -NoNewline
     Write-Host ("{0}" -f $MirrorSource) -ForegroundColor Green
     Write-Host '  └─────────────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
@@ -261,9 +395,10 @@ function Show-Banner {
 '@
     Write-Host $logo -ForegroundColor Cyan
     Write-Host ''
-    Write-Host '  ┌─ 一键部署管理器 ──────────────────────────────────────────────' -ForegroundColor DarkCyan
-    Write-Host '  │  便携运行环境 · 自动镜像加速 · 完整依赖自检 · 极速启动' -ForegroundColor Gray
+    Write-Host (T '  ┌─ 一键部署管理器 ──────────────────────────────────────────────' '  ┌─ One-Click Deployment Manager ────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  │  便携运行环境 · 自动镜像加速 · 完整依赖自检 · 极速启动' '  │  Portable Runtime · Auto Mirror · Dependency Probe · Fast Start') -ForegroundColor Gray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host ''
 }
 
 function Show-Dashboard {
@@ -274,36 +409,37 @@ function Show-Dashboard {
     Write-Host ''
     Write-Host '  ┌───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host '[✓] DeepSeek Harness 网页服务已就绪！' -ForegroundColor Green
+    Write-Host (T '[✓] DeepSeek Harness 网页服务已就绪！' '[✓] DeepSeek Harness Web Service Ready!') -ForegroundColor Green
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host '  │  ➜ 本地访问:  ' -ForegroundColor Gray -NoNewline
+    Write-Host (T '  │  ➜ 本地访问:  ' '  │  ➜ Local URL: ') -ForegroundColor Gray -NoNewline
     Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
-    Write-Host '  │  ➜ 核心版本:  ' -ForegroundColor Gray -NoNewline
-    Write-Host ("v{0} (便携运行时)" -f $Version) -ForegroundColor White
+    Write-Host (T '  │  ➜ 核心版本:  ' '  │  ➜ Version:   ') -ForegroundColor Gray -NoNewline
+    Write-Host (T ("v{0} (便携运行时)" -f $Version) ("v{0} (Portable)" -f $Version)) -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host '  │  使用提示:' -ForegroundColor Yellow
-    Write-Host '  │  · 系统将自动尝试在默认浏览器中打开该页面' -ForegroundColor Gray
-    Write-Host '  │  · 若未自动弹出，请复制下方日志中包含 ?token= 的完整链接' -ForegroundColor Gray
-    Write-Host '  │  · 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' -ForegroundColor Gray
+    Write-Host (T '  │  使用提示:' '  │  Usage Tips:') -ForegroundColor Yellow
+    Write-Host (T '  │  · 系统将自动尝试在默认浏览器中打开该页面' '  │  · Browser will open this URL automatically') -ForegroundColor Gray
+    Write-Host (T '  │  · 若未自动弹出，请复制下方日志中包含 ?token= 的完整链接' '  │  · Or copy the full URL with ?token= from log below') -ForegroundColor Gray
+    Write-Host (T '  │  · 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' '  │  · Keep this window open; Press Ctrl + C to safely stop') -ForegroundColor Gray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
 function Show-Help {
     Write-Host ''
-    Write-Host '  ┌─ 命令参数说明 ────────────────────────────────────────────────' -ForegroundColor DarkCyan
-    Write-Host '  │  用法: dsh-setup.bat [选项]' -ForegroundColor White
+    Write-Host (T '  ┌─ 命令参数说明 ────────────────────────────────────────────────' '  ┌─ Command Line Options ────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  │  用法: dsh-setup.bat [选项]' '  │  Usage: dsh-setup.bat [options]') -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host '  │  选项列表:' -ForegroundColor Cyan
-    Write-Host '  │    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' -ForegroundColor Gray
-    Write-Host '  │    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' -ForegroundColor Gray
-    Write-Host '  │    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' -ForegroundColor Gray
-    Write-Host '  │    --clean, --reset      清理并重置便携运行时目录（dsh-runtime）' -ForegroundColor Gray
-    Write-Host '  │    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' -ForegroundColor Gray
-    Write-Host '  │    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' -ForegroundColor Gray
-    Write-Host '  │    --no-open             启动服务后不自动调用浏览器打开网页' -ForegroundColor Gray
-    Write-Host '  │    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' -ForegroundColor Gray
-    Write-Host '  │    --help, -h            显示此帮助信息' -ForegroundColor Gray
+    Write-Host (T '  │  选项列表:' '  │  Options:') -ForegroundColor Cyan
+    Write-Host (T '  │    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' '  │    --install-only        Install/update and probe, without starting web') -ForegroundColor Gray
+    Write-Host (T '  │    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' '  │    --fast, --skip-check  Fast mode: skip update checks, launch instantly') -ForegroundColor Gray
+    Write-Host (T '  │    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' '  │    --reinstall, --update Force reinstall: re-fetch and rebuild dependencies') -ForegroundColor Gray
+    Write-Host (T '  │    --clean, --reset      清理并重置便携运行时目录（dsh-runtime）' '  │    --clean, --reset      Clean and reset portable runtime directory') -ForegroundColor Gray
+    Write-Host (T '  │    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' '  │    --create-shortcut     Create desktop shortcut and exit') -ForegroundColor Gray
+    Write-Host (T '  │    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' '  │    --port <number>       Specify web port (default 3080, auto fallback)') -ForegroundColor Gray
+    Write-Host (T '  │    --lang <zh|en>        切换语言界面（默认随操作系统自动自适应）' '  │    --lang <zh|en>        Switch UI language (default: system locale)') -ForegroundColor Gray
+    Write-Host (T '  │    --no-open             启动服务后不自动调用浏览器打开网页' '  │    --no-open             Do not open browser automatically') -ForegroundColor Gray
+    Write-Host (T '  │    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' '  │    --no-pause            Non-interactive mode, do not wait for enter key') -ForegroundColor Gray
+    Write-Host (T '  │    --help, -h            显示此帮助信息' '  │    --help, -h            Show this help manual') -ForegroundColor Gray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
@@ -1061,35 +1197,52 @@ function Main {
     Set-Location -LiteralPath $SetupRoot
     Show-Banner
 
+    # 交互模式下的 3 秒快速操作面板
+    $quickAction = Show-QuickActionMenu
+    if ($null -ne $quickAction) {
+        switch ($quickAction.ToLower()) {
+            'f' { $env:DSH_SETUP_FAST = '1' }
+            'r' { $env:DSH_SETUP_REINSTALL = '1' }
+            'c' { $env:DSH_SETUP_CLEAN = '1' }
+            's' { $env:DSH_SETUP_SHORTCUT = '1' }
+            'h' { Show-Help; exit 0 }
+        }
+    }
+
     # 清理重置便携运行时指令
     if ($env:DSH_SETUP_CLEAN -eq '1') {
-        Write-Step '清理便携运行时环境'
+        Write-Step (T '清理便携运行时环境' 'Clean Portable Runtime Environment')
         if (Test-Path -LiteralPath $RuntimeRoot) {
-            Write-Info ("正在清理目录：{0}..." -f $RuntimeRoot)
+            Write-Info (T ("正在清理目录：{0}..." -f $RuntimeRoot) ("Cleaning directory: {0}..." -f $RuntimeRoot))
             try {
                 Remove-Item -LiteralPath $RuntimeRoot -Recurse -Force
-                Write-Ok '便携运行时已彻底清理完成。下次运行将重新进行全新部署。'
+                Write-Ok (T '便携运行时已彻底清理完成。下次运行将重新进行全新部署。' 'Portable runtime cleaned. Fresh deployment on next run.')
             } catch {
-                Write-Fail ("清理失败（请先确保关闭正在运行的 DeepSeek Harness 窗口与服务）：{0}" -f $_.Exception.Message)
+                Write-Fail (T ("清理失败（请先确保关闭正在运行的 DeepSeek Harness 窗口与服务）：{0}" -f $_.Exception.Message) ("Cleanup failed: {0}" -f $_.Exception.Message))
             }
         } else {
-            Write-Ok '便携运行时目录不存在，无需清理。'
+            Write-Ok (T '便携运行时目录不存在，无需清理。' 'Portable runtime does not exist, nothing to clean.')
         }
-        Wait-ForClose '按回车键关闭窗口...'
+        Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
         exit 0
     }
 
     # 快捷方式创建指令
     if ($env:DSH_SETUP_SHORTCUT -eq '1') {
-        Write-Step '创建桌面快捷方式'
+        Write-Step (T '创建桌面快捷方式' 'Create Desktop Shortcut')
         $shortcutArgs = if ($env:DSH_SETUP_FAST -eq '1') { '--fast' } else { '' }
         $lnk = New-DesktopShortcut -Arguments $shortcutArgs
         if ($null -ne $lnk) {
-            $modeDesc = if ($env:DSH_SETUP_FAST -eq '1') { '（包含 --fast 极速启动参数）' } else { '' }
-            Write-Ok ("已在桌面创建快捷方式{0}：{1}" -f $modeDesc, $lnk)
+            $modeDesc = if ($env:DSH_SETUP_FAST -eq '1') { (T '（包含 --fast 极速启动参数）' ' (with --fast arg)') } else { '' }
+            Write-Ok (T ("已在桌面创建快捷方式{0}：{1}" -f $modeDesc, $lnk) ("Shortcut created{0}: {1}" -f $modeDesc, $lnk))
         }
-        Wait-ForClose '按回车键关闭窗口...'
+        Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
         exit 0
+    }
+
+    # Visual C++ 运行库健康体检
+    if (-not (Test-VcRedistInstalled)) {
+        Write-Notice (T '未检测到 Visual C++ 2015-2022 运行库，如遇启动异常请安装：https://aka.ms/vs/17/release/vc_redist.x64.exe' 'Visual C++ runtime not detected. If native probes fail, install: https://aka.ms/vs/17/release/vc_redist.x64.exe')
     }
 
     $nodeMeta = Ensure-PortableNode
@@ -1104,21 +1257,24 @@ function Main {
     $dshVersion = $dshMeta.Version
 
     if ($env:DSH_SETUP_INSTALL_ONLY -eq '1') {
-        Write-TimedLine -Prefix "  ● [3/3] " -Title "安装校验模式完成（不启动网页服务）" -ElapsedMs 0
+        Write-TimedLine -Prefix "  ● [3/3] " -Title (T '安装校验模式完成（不启动网页服务）' 'Installation verified (service not started)') -ElapsedMs 0
         Write-Host ''
         Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
-        Write-Info ('后续随时可手动运行："{0}" web 启动服务。' -f $DshCmd)
+        Write-Info (T ('后续随时可手动运行："{0}" web 启动服务。' -f $DshCmd) ('Run "{0}" web to start server anytime.' -f $DshCmd))
         return
     }
 
     $swPort = [Diagnostics.Stopwatch]::StartNew()
     $port = Get-WebPort
     $swPort.Stop()
-    Write-TimedLine -Prefix "  ● [3/3] " -Title ("本地 Web 服务端口就绪 (Port {0})" -f $port) -ElapsedMs $swPort.ElapsedMilliseconds
+    Write-TimedLine -Prefix "  ● [3/3] " -Title (T ("本地 Web 服务端口就绪 (Port {0})" -f $port) ("Local web port ready (Port {0})" -f $port)) -ElapsedMs $swPort.ElapsedMilliseconds
 
     Write-Host ''
     Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
     Show-Dashboard -Version $dshVersion -Port $port
+
+    # 启动后台异步 Web 活跃心跳探测
+    Start-WebHeartbeatPing -Port $port
 
     if ($env:DSH_SETUP_NO_OPEN -eq '1') {
         & $DshCmd web --port $port --no-open
@@ -1132,7 +1288,7 @@ function Main {
         throw "DeepSeek Harness 服务异常停止，退出码：$webExitCode"
     }
 
-    Write-Notice 'DeepSeek Harness 服务已安全停止。'
+    Write-Notice (T 'DeepSeek Harness 服务已安全停止。' 'DeepSeek Harness service stopped safely.')
 }
 
 try {
