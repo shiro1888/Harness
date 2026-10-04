@@ -36,7 +36,13 @@ shift
 goto parse_arguments
 
 :parse_port
+set "_val=%~2"
 if "%~2"=="" (
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--port 缺少端口数值"
+    shift
+    goto parse_arguments
+)
+if "%_val:~0,1%"=="-" (
     if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--port 缺少端口数值"
     shift
     goto parse_arguments
@@ -47,7 +53,13 @@ shift
 goto parse_arguments
 
 :parse_lang
+set "_val=%~2"
 if "%~2"=="" (
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--lang 缺少语言选项 (zh/en)"
+    shift
+    goto parse_arguments
+)
+if "%_val:~0,1%"=="-" (
     if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--lang 缺少语言选项 (zh/en)"
     shift
     goto parse_arguments
@@ -58,6 +70,7 @@ shift
 goto parse_arguments
 
 :run_installer
+set "_val="
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$raw=[IO.File]::ReadAllText($env:DSH_SETUP_FILE,[Text.Encoding]::UTF8);$marker='# POWERSHELL_START';$offset=$raw.LastIndexOf($marker,[StringComparison]::Ordinal);if($offset -lt 0){throw 'PowerShell payload is missing.'};&([ScriptBlock]::Create($raw.Substring($offset)))"
 exit /b %ERRORLEVEL%
 
@@ -1132,10 +1145,10 @@ function Get-WebPort {
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $requested = 0
         if (-not [int]::TryParse($env:DSH_SETUP_PORT, [ref]$requested) -or $requested -lt 1 -or $requested -gt 65535) {
-            throw "指定的端口数值无效：$($env:DSH_SETUP_PORT)"
+            throw (T "指定的端口数值无效：$($env:DSH_SETUP_PORT)" "Invalid port option: $($env:DSH_SETUP_PORT)")
         }
         if (-not (Test-LocalPortAvailable -Port $requested)) {
-            throw "指定端口 $requested 已被占用，请更换端口后重试。"
+            throw (T "指定端口 $requested 已被占用，请更换端口后重试。" "Specified port $requested is already in use. Please choose another port.")
         }
         return $requested
     }
@@ -1143,13 +1156,13 @@ function Get-WebPort {
     foreach ($candidate in 3080..3099) {
         if (Test-LocalPortAvailable -Port $candidate) {
             if ($candidate -ne 3080) {
-                Write-Notice ("默认端口 3080 已被占用，自动选择空闲端口 {0}。" -f $candidate)
+                Write-Notice (T ("默认端口 3080 已被占用，自动选择空闲端口 {0}。" -f $candidate) ("Default port 3080 is in use, switched to free port {0}." -f $candidate))
             }
             return $candidate
         }
     }
 
-    throw '本地端口 3080 到 3099 均被占用，请关闭占用程序后重试。'
+    throw (T '本地端口 3080 到 3099 均被占用，请关闭占用程序后重试。' 'Local ports 3080 to 3099 are all in use. Please close conflicting programs and retry.')
 }
 
 function Main {
@@ -1159,13 +1172,16 @@ function Main {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_BAD_ARG)) {
-        throw "不支持的参数：$($env:DSH_SETUP_BAD_ARG)。请使用 --help 查看支持的完整参数列表。"
+        throw (T "不支持的参数：$($env:DSH_SETUP_BAD_ARG)。请使用 --help 查看支持的完整参数列表。" "Unsupported parameter: $($env:DSH_SETUP_BAD_ARG). Use --help for full options.")
     }
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $validatedPort = 0
         if (-not [int]::TryParse($env:DSH_SETUP_PORT, [ref]$validatedPort) -or $validatedPort -lt 1 -or $validatedPort -gt 65535) {
-            throw "端口参数无效：$($env:DSH_SETUP_PORT)"
+            throw (T "端口参数数值无效：$($env:DSH_SETUP_PORT)（有效范围 1-65535）" "Invalid port parameter: $($env:DSH_SETUP_PORT) (Valid range: 1-65535)")
         }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_LANG) -and $env:DSH_SETUP_LANG -ne 'zh' -and $env:DSH_SETUP_LANG -ne 'en') {
+        throw (T "语言参数仅支持 zh 或 en：$($env:DSH_SETUP_LANG)" "Language parameter only supports zh or en: $($env:DSH_SETUP_LANG)")
     }
 
     Set-Location -LiteralPath $SetupRoot
