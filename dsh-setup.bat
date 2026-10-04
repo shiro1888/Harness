@@ -107,8 +107,27 @@ if ($consoleCodePage -eq 65001) {
     $OutputEncoding = $legacy
 }
 
+# ============================
+# 国际化语言自适应与文本辅助
+# ============================
+$Global:IsEnglish = ($env:DSH_SETUP_LANG -eq 'en')
+if (-not $Global:IsEnglish -and [string]::IsNullOrWhiteSpace($env:DSH_SETUP_LANG)) {
+    try {
+        $sysLang = [System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName
+        if ($sysLang -ne 'zh') {
+            $Global:IsEnglish = $true
+        }
+    } catch {}
+}
+
+function T {
+    param([string]$Zh, [string]$En)
+    if ($Global:IsEnglish) { return $En }
+    return $Zh
+}
+
 try {
-    $Host.UI.RawUI.WindowTitle = 'DeepSeek Harness 一键部署管理器'
+    $Host.UI.RawUI.WindowTitle = T 'DeepSeek Harness 一键部署管理器' 'DeepSeek Harness Deployment Manager'
     if ($Host.UI.RawUI.WindowSize.Width -lt 85) {
         $Host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size(88, [Math]::Max(28, $Host.UI.RawUI.WindowSize.Height))
     }
@@ -129,24 +148,7 @@ $NpmCache = Join-Path $RuntimeRoot 'npm-cache'
 $FallbackNodeVersion = 'v24.21.0'
 $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
 
-# ============================
-# 国际化语言自适应与文本辅助
-# ============================
-$Global:IsEnglish = ($env:DSH_SETUP_LANG -eq 'en')
-if (-not $Global:IsEnglish -and [string]::IsNullOrWhiteSpace($env:DSH_SETUP_LANG)) {
-    try {
-        $sysLang = [System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName
-        if ($sysLang -ne 'zh') {
-            $Global:IsEnglish = $true
-        }
-    } catch {}
-}
 
-function T {
-    param([string]$Zh, [string]$En)
-    if ($Global:IsEnglish) { return $En }
-    return $Zh
-}
 
 # ============================
 # UI 美化与提示函数
@@ -251,7 +253,7 @@ function Show-QuickActionMenu {
 
     Write-Host (T '  ┌─ 快捷操作面板 ──────────────────────────────────────────────────────' '  ┌─ Quick Action Panel ────────────────────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host (T '  │  [Enter] 正常启动      [F] 极速秒启      [R] 强制重装' '  │  [Enter] Start Normal   [F] Fast Launch   [R] Force Reinstall') -ForegroundColor Gray
-    Write-Host (T '  │  [C]     清理重置      [S] 创建快捷方式  [H] 命令帮助' '  │  [C]     Clean/Reset    [S] Shortcut      [H] Help Manual') -ForegroundColor Gray
+    Write-Host (T '  │  [C]     清理重置      [S] 快捷方式      [H] 帮助文档      [Q] 退出' '  │  [C]     Clean/Reset    [S] Shortcut      [H] Help Manual   [Q] Exit') -ForegroundColor Gray
     Write-Host '  │' -ForegroundColor DarkCyan
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -272,14 +274,26 @@ function Show-QuickActionMenu {
         try {
             if ([Console]::KeyAvailable) {
                 $keyInfo = [Console]::ReadKey($true)
+                if ($keyInfo.Key -eq [ConsoleKey]::Escape) {
+                    $selectedKey = 'q'
+                    break
+                }
                 $selectedKey = [string]$keyInfo.KeyChar
                 break
             }
         } catch { break }
         Start-Sleep -Milliseconds 60
     }
-    $doneMsg = if ($Global:IsEnglish) { "`r  │  Starting...                                    " } else { "`r  │  启动中...                                      " }
-    Write-Host $doneMsg -ForegroundColor DarkCyan
+    $actionMsg = switch -Regex ($selectedKey) {
+        '(?i)f' { T "`r  │  已选择：极速秒启模式...                         " "`r  │  Selected: Fast Launch...                       " }
+        '(?i)r' { T "`r  │  已选择：强制重装模式...                         " "`r  │  Selected: Force Reinstall...                   " }
+        '(?i)c' { T "`r  │  已选择：清理便携环境...                         " "`r  │  Selected: Clean & Reset...                     " }
+        '(?i)s' { T "`r  │  已选择：创建桌面快捷方式...                     " "`r  │  Selected: Create Shortcut...                   " }
+        '(?i)h' { T "`r  │  已选择：查看命令帮助...                         " "`r  │  Selected: Show Help...                         " }
+        '(?i)q' { T "`r  │  已取消操作，正在退出...                         " "`r  │  Operation canceled, exiting...                 " }
+        default { T "`r  │  正在启动服务...                                 " "`r  │  Starting service...                            " }
+    }
+    Write-Host $actionMsg -ForegroundColor DarkCyan
     Write-Host '  └─────────────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 
@@ -324,8 +338,12 @@ function Start-WebHeartbeatPing {
 
 function Get-LocalLanIp {
     try {
-        $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi*", "以太网*", "Ethernet*", "WLAN*" -ErrorAction SilentlyContinue |
-            Where-Object { $_.IPAddress -notmatch "^(169\.254|127\.)" -and $_.PrefixOrigin -ne "WellKnown" } |
+        $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi*", "以太网*", "Ethernet*", "WLAN*", "本地连接*" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.IPAddress -notmatch "^(169\.254|127\.)" -and
+                $_.PrefixOrigin -ne "WellKnown" -and
+                $_.InterfaceAlias -notmatch "(vEthernet|VirtualBox|VMware|WSL|Tailscale|ZeroTier)"
+            } |
             Select-Object -First 1).IPAddress
         if (-not $ip) {
             $ip = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
@@ -478,7 +496,7 @@ function New-DesktopShortcut {
             $shortcut.Arguments = $Arguments
         }
         $shortcut.WorkingDirectory = $SetupRoot
-        $shortcut.Description = 'DeepSeek Harness 一键启动'
+        $shortcut.Description = (T 'DeepSeek Harness 一键启动' 'DeepSeek Harness One-Click Launcher')
         if (Test-Path -LiteralPath $NodeExe -PathType Leaf) {
             $shortcut.IconLocation = "$NodeExe,0"
         }
@@ -899,20 +917,21 @@ function Ensure-PortableNode {
     if ((Test-Path -LiteralPath $NodeExe -PathType Leaf) -and (Test-Path -LiteralPath $NpmCmd -PathType Leaf)) {
         try {
             $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
-            if ($LASTEXITCODE -eq 0 -and $version -match '^v\d+\.\d+\.\d+$') {
+            $npmVer = (& $NpmCmd --version 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $version -match '^v\d+\.\d+\.\d+$' -and -not [string]::IsNullOrWhiteSpace($npmVer)) {
                 $swNode.Stop()
-                Write-TimedLine -Prefix "  ● [1/3] " -Title ("便携 Node.js 运行时就绪 ({0} {1})" -f $version, $architecture) -ElapsedMs $swNode.ElapsedMilliseconds
+                Write-TimedLine -Prefix "  ● [1/3] " -Title (T ("便携 Node.js 运行时就绪 ({0} {1})" -f $version, $architecture) ("Portable Node.js runtime ready ({0} {1})" -f $version, $architecture)) -ElapsedMs $swNode.ElapsedMilliseconds
                 return [pscustomobject]@{ Version = $version; Architecture = $architecture }
             }
         } catch {
-            Write-Notice '现有便携 Node.js 无法运行，正在自动重新准备。'
+            Write-Notice (T '现有便携 Node.js 无法运行，正在自动重新准备。' 'Existing portable Node.js failed to run, re-preparing automatically.')
         }
     }
 
     Install-PortableNode -Architecture $architecture
     $swNode.Stop()
     $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
-    Write-TimedLine -Prefix "  ● [1/3] " -Title ("便携 Node.js 安装部署完成 ({0} {1})" -f $version, $architecture) -ElapsedMs $swNode.ElapsedMilliseconds
+    Write-TimedLine -Prefix "  ● [1/3] " -Title (T ("便携 Node.js 安装部署完成 ({0} {1})" -f $version, $architecture) ("Portable Node.js installation complete ({0} {1})" -f $version, $architecture)) -ElapsedMs $swNode.ElapsedMilliseconds
     return [pscustomobject]@{ Version = $version; Architecture = $architecture }
 }
 
@@ -1042,11 +1061,11 @@ function Ensure-LatestDsh {
     $swNet.Stop()
 
     if ($null -eq $release) {
-        throw '无法连接 npm 官方仓库或国内镜像，且本机暂无可用安装版本。请检查网络或代理设置。'
+        throw (T '无法连接 npm 官方仓库或国内镜像，且本机暂无可用安装版本。请检查网络或代理设置。' 'Cannot connect to npm official or mirror registry, and no local installation found. Please check network/proxy.')
     }
 
     if (-not $release.Skipped) {
-        Write-TimedLine -Prefix "    ├─ " -Title "npm 官方与国内镜像并发竞速" -ElapsedMs $swNet.ElapsedMilliseconds
+        Write-TimedLine -Prefix "    ├─ " -Title (T "npm 官方与国内镜像并发竞速" "npm official & mirror parallel race") -ElapsedMs $swNet.ElapsedMilliseconds
     }
 
     $expectedVersion = $release.Latest
@@ -1057,24 +1076,24 @@ function Ensure-LatestDsh {
         # 已是最新版
     } else {
         if ($forceReinstall -and ($installed -eq $release.Latest)) {
-            Write-Info ("强制重装模式：正在重新部署当前最新版本 {0}..." -f $release.Latest)
+            Write-Info (T ("强制重装模式：正在重新部署当前最新版本 {0}..." -f $release.Latest) ("Force reinstall: redeploying latest version {0}..." -f $release.Latest))
         } elseif ($null -eq $installed) {
-            Write-Info ("正在通过{0}安装 {1}，首次安装需拉取并配置依赖，请稍候..." -f $release.Source, $release.Latest)
+            Write-Info (T ("正在通过{0}安装 {1}，首次安装需拉取并配置依赖，请稍候..." -f $release.Source, $release.Latest) ("Installing {1} via {0}, please wait..." -f $release.Source, $release.Latest))
         } else {
-            Write-Info ("正在通过{0}把版本从 {1} 更新至 {2}..." -f $release.Source, $installed, $release.Latest)
+            Write-Info (T ("正在通过{0}把版本从 {1} 更新至 {2}..." -f $release.Source, $installed, $release.Latest) ("Updating version from {1} to {2} via {0}..." -f $release.Source, $installed, $release.Latest))
         }
 
         $swInstall = [Diagnostics.Stopwatch]::StartNew()
         $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.Registry
         if ($exitCode -ne 0 -and $release.FallbackRegistry -and $release.FallbackRegistry -ne $release.Registry) {
-            Write-Notice '国内镜像安装遇到异常，正在改用 npm 官方仓库自动重试...'
+            Write-Notice (T '国内镜像安装遇到异常，正在改用 npm 官方仓库自动重试...' 'Mirror install encountered an issue, retrying with official npm registry...')
             $exitCode = Invoke-DshInstall -Version $release.Latest -Registry $release.FallbackRegistry
         }
         $swInstall.Stop()
         if ($exitCode -ne 0) {
             throw "npm 安装 dsh 失败，退出码：$exitCode"
         }
-        Write-TimedLine -Prefix "    ├─ " -Title ("拉取并安装核心组件 (v{0})" -f $release.Latest) -ElapsedMs $swInstall.ElapsedMilliseconds
+        Write-TimedLine -Prefix "    ├─ " -Title (T ("拉取并安装核心组件 (v{0})" -f $release.Latest) ("Fetch and install core package (v{0})" -f $release.Latest)) -ElapsedMs $swInstall.ElapsedMilliseconds
     }
 
     $verifiedVersion = Get-InstalledDshVersion
@@ -1102,25 +1121,25 @@ function Ensure-LatestDsh {
     $swProbe = [Diagnostics.Stopwatch]::StartNew()
     $runtimeProbe = Test-DshRuntimeDependencies
     if (-not $runtimeProbe.Ok) {
-        Write-Notice ("运行依赖自检未通过，正在尝试自动修复：{0}" -f $runtimeProbe.Message)
+        Write-Notice (T ("运行依赖自检未通过，正在尝试自动修复：{0}" -f $runtimeProbe.Message) ("Runtime probe failed, attempting automatic repair: {0}" -f $runtimeProbe.Message))
         $rebuildExit = Invoke-DshRebuild
         if ($rebuildExit -ne 0) {
             throw "dsh 依赖修复失败，npm 退出码：$rebuildExit"
         }
         $runtimeProbe = Test-DshRuntimeDependencies
         if (-not $runtimeProbe.Ok) {
-            throw "dsh 依赖修复后仍未通过自检：$($runtimeProbe.Message)"
+            throw (T ("dsh 依赖修复后仍未通过自检：{0}。如缺少 VC++ 运行库，请安装：https://aka.ms/vs/17/release/vc_redist.x64.exe" -f $runtimeProbe.Message) ("dsh probe failed after rebuild: {0}. If VC++ runtime is missing, install: https://aka.ms/vs/17/release/vc_redist.x64.exe" -f $runtimeProbe.Message))
         }
     }
     $swProbe.Stop()
-    Write-TimedLine -Prefix "    └─ " -Title "Koffi 原生模块与 Windows 伪终端自检" -ElapsedMs $swProbe.ElapsedMilliseconds
+    Write-TimedLine -Prefix "    └─ " -Title (T "Koffi 原生模块与 Windows 伪终端自检" "Koffi native module & Windows PTY probe") -ElapsedMs $swProbe.ElapsedMilliseconds
 
     $swDsh.Stop()
-    Write-TimedLine -Prefix "  ● [2/3] " -Title ("DeepSeek Harness 核心组件就绪 (v{0})" -f $verifiedVersion) -ElapsedMs $swDsh.ElapsedMilliseconds
+    Write-TimedLine -Prefix "  ● [2/3] " -Title (T ("DeepSeek Harness 核心组件就绪 (v{0})" -f $verifiedVersion) ("DeepSeek Harness core package ready (v{0})" -f $verifiedVersion)) -ElapsedMs $swDsh.ElapsedMilliseconds
 
     return [pscustomobject]@{
         Version = $verifiedVersion
-        Source  = if ($release.Skipped) { '离线模式' } else { $release.Source }
+        Source  = if ($release.Skipped) { (T '离线模式' 'Offline mode') } else { $release.Source }
     }
 }
 
@@ -1196,6 +1215,7 @@ function Main {
             'c' { $env:DSH_SETUP_CLEAN = '1' }
             's' { $env:DSH_SETUP_SHORTCUT = '1' }
             'h' { Show-Help; exit 0 }
+            'q' { exit 0 }
         }
     }
 
