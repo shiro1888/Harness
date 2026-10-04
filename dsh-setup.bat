@@ -361,6 +361,41 @@ function Start-WebHeartbeatPing {
     } catch {}
 }
 
+function Get-LocalLanIp {
+    try {
+        $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi*", "以太网*", "Ethernet*", "WLAN*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -notmatch "^(169\.254|127\.)" -and $_.PrefixOrigin -ne "WellKnown" } |
+            Select-Object -First 1).IPAddress
+        if (-not $ip) {
+            $ip = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
+                Where-Object { $_.AddressFamily -eq "InterNetwork" -and $_.IPAddressToString -notmatch "^(127\.|169\.254)" } |
+                Select-Object -First 1).IPAddressToString
+        }
+        return $ip
+    } catch {
+        return $null
+    }
+}
+
+function Get-HardwareSpecSummary {
+    try {
+        $cores = $env:NUMBER_OF_PROCESSORS
+        $memGb = $null
+        try {
+            $ram = Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop | Measure-Object -Property Capacity -Sum
+            if ($ram -and $ram.Sum -gt 0) {
+                $memGb = [Math]::Round($ram.Sum / 1GB)
+            }
+        } catch {}
+        if ($memGb) {
+            return ("{0}C · {1}G" -f $cores, $memGb)
+        } elseif ($cores) {
+            return ("{0} Cores" -f $cores)
+        }
+    } catch {}
+    return $null
+}
+
 function Show-StatusCard {
     param(
         [string]$Arch,
@@ -368,10 +403,13 @@ function Show-StatusCard {
         [string]$DshVer,
         [string]$MirrorSource
     )
+    $hwSpec = Get-HardwareSpecSummary
+    $archText = if ($hwSpec) { ("Win ({0} · {1})" -f $Arch, $hwSpec) } else { ("Windows ({0})" -f $Arch) }
+
     Write-Host (T '  ┌─ 运行状态看板 ──────────────────────────────────────────────────────' '  ┌─ Runtime Status Matrix ─────────────────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '架构平台: ' 'Platform:   ') -ForegroundColor Gray -NoNewline
-    Write-Host ("Windows ({0})" -f $Arch).PadRight(22) -ForegroundColor White -NoNewline
+    Write-Host (T '架构硬件: ' 'Platform:   ') -ForegroundColor Gray -NoNewline
+    Write-Host $archText.PadRight(22) -ForegroundColor White -NoNewline
     Write-Host (T '便携运行时: ' 'Runtime:    ') -ForegroundColor Gray -NoNewline
     Write-Host ("Node.js {0}" -f $NodeVer) -ForegroundColor White
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
@@ -385,15 +423,13 @@ function Show-StatusCard {
 
 function Show-Banner {
     Write-Host ''
-    $logo = @'
-    ____                  ____            _    
-   |  _ \  ___  ___ _ __ / ___|  ___  ___| | __
-   | | | |/ _ \/ _ \ '_ \ \___ \ / _ \/ _ \ |/ /
-   | |_| |  __/  __/ |_) |___) |  __/  __/   < 
-   |____/ \___|\___| .__/ |____/ \___|\___|_|\_\
-                   |_|   H A R N E S S         
-'@
-    Write-Host $logo -ForegroundColor Cyan
+    Write-Host "    ____                  ____            _    " -ForegroundColor Cyan
+    Write-Host "   |  _ \  ___  ___ _ __ / ___|  ___  ___| | __" -ForegroundColor Cyan
+    Write-Host "   | | | |/ _ \/ _ \ '_ \ \___ \ / _ \/ _ \ |/ /" -ForegroundColor DarkCyan
+    Write-Host "   | |_| |  __/  __/ |_) |___) |  __/  __/   < " -ForegroundColor DarkCyan
+    Write-Host "   |____/ \___|\___| .__/ |____/ \___|\___|_|\_\" -ForegroundColor Blue
+    Write-Host "                   |_|   " -NoNewline -ForegroundColor Blue
+    Write-Host "H A R N E S S         " -ForegroundColor White
     Write-Host ''
     Write-Host (T '  ┌─ 一键部署管理器 ──────────────────────────────────────────────' '  ┌─ One-Click Deployment Manager ────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host (T '  │  便携运行环境 · 自动镜像加速 · 完整依赖自检 · 极速启动' '  │  Portable Runtime · Auto Mirror · Dependency Probe · Fast Start') -ForegroundColor Gray
@@ -406,18 +442,28 @@ function Show-Dashboard {
         [string]$Version,
         [int]$Port
     )
+    $lanIp = Get-LocalLanIp
+
     Write-Host ''
     Write-Host '  ┌───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '[✓] DeepSeek Harness 网页服务已就绪！' '[✓] DeepSeek Harness Web Service Ready!') -ForegroundColor Green
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host (T '  │  ➜ 本地访问:  ' '  │  ➜ Local URL: ') -ForegroundColor Gray -NoNewline
+    Write-Host (T '  │  ➜ 本机电脑:   ' '  │  ➜ Local (PC): ') -ForegroundColor Gray -NoNewline
     Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
-    Write-Host (T '  │  ➜ 核心版本:  ' '  │  ➜ Version:   ') -ForegroundColor Gray -NoNewline
+    if ($lanIp) {
+        Write-Host (T '  │  ➜ 手机/平板:  ' '  │  ➜ Mobile/LAN: ') -ForegroundColor Gray -NoNewline
+        Write-Host ("http://{0}:{1}" -f $lanIp, $Port) -ForegroundColor Green -NoNewline
+        Write-Host (T ' (同一 Wi-Fi 局域网)' ' (Same Wi-Fi network)') -ForegroundColor DarkGray
+    }
+    Write-Host (T '  │  ➜ 核心版本:   ' '  │  ➜ Version:    ') -ForegroundColor Gray -NoNewline
     Write-Host (T ("v{0} (便携运行时)" -f $Version) ("v{0} (Portable)" -f $Version)) -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-Host (T '  │  使用提示:' '  │  Usage Tips:') -ForegroundColor Yellow
-    Write-Host (T '  │  · 系统将自动尝试在默认浏览器中打开该页面' '  │  · Browser will open this URL automatically') -ForegroundColor Gray
+    Write-Host (T '  │  · 电脑端：默认浏览器将自动尝试打开本地访问地址' '  │  · PC: Browser will open local URL automatically') -ForegroundColor Gray
+    if ($lanIp) {
+        Write-Host (T '  │  · 手机端：连接同一 Wi-Fi，在手机浏览器中打开上方手机地址' '  │  · Mobile: Connect same Wi-Fi and open mobile URL in browser') -ForegroundColor Gray
+    }
     Write-Host (T '  │  · 若未自动弹出，请复制下方日志中包含 ?token= 的完整链接' '  │  · Or copy the full URL with ?token= from log below') -ForegroundColor Gray
     Write-Host (T '  │  · 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' '  │  · Keep this window open; Press Ctrl + C to safely stop') -ForegroundColor Gray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
