@@ -157,7 +157,14 @@ function Get-DisplayWidth {
     param([string]$Text)
     $w = 0
     foreach ($ch in $Text.ToCharArray()) {
-        if ([int]$ch -gt 127) { $w += 2 } else { $w += 1 }
+        $code = [int]$ch
+        if ($code -ge 0x2500 -and $code -le 0x257F) {
+            $w += 1
+        } elseif ($code -gt 127) {
+            $w += 2
+        } else {
+            $w += 1
+        }
     }
     return $w
 }
@@ -168,6 +175,47 @@ function Format-ElapsedText {
         return ("{0:N1}s" -f ($Milliseconds / 1000))
     }
     return ("{0}ms" -f $Milliseconds)
+}
+
+function Write-BoxHeader {
+    param(
+        [string]$Title,
+        [string]$BadgeText = "",
+        [ConsoleColor]$BadgeBg = [ConsoleColor]::DarkCyan,
+        [ConsoleColor]$BadgeFg = [ConsoleColor]::Black,
+        [int]$TotalWidth = 66
+    )
+    Write-Host "  ┌─ " -ForegroundColor DarkCyan -NoNewline
+    Write-Host $Title -ForegroundColor White -NoNewline
+    if (-not [string]::IsNullOrWhiteSpace($BadgeText)) {
+        Write-Host " " -NoNewline
+        Write-Host " $BadgeText " -BackgroundColor $BadgeBg -ForegroundColor $BadgeFg -NoNewline
+        Write-Host " " -ForegroundColor DarkCyan -NoNewline
+        $len = 5 + (Get-DisplayWidth $Title) + 1 + (Get-DisplayWidth " $BadgeText ") + 1
+    } else {
+        Write-Host " " -ForegroundColor DarkCyan -NoNewline
+        $len = 5 + (Get-DisplayWidth $Title) + 1
+    }
+    $rem = [Math]::Max(3, ($TotalWidth - $len))
+    Write-Host ("─" * $rem) -ForegroundColor DarkCyan
+}
+
+function Write-BoxDivider {
+    param(
+        [string]$Title = "",
+        [int]$TotalWidth = 66
+    )
+    if ([string]::IsNullOrWhiteSpace($Title)) {
+        Write-Host "  ├" -ForegroundColor DarkCyan -NoNewline
+        Write-Host ("─" * ($TotalWidth - 3)) -ForegroundColor DarkCyan
+    } else {
+        Write-Host "  ├─ " -ForegroundColor DarkCyan -NoNewline
+        Write-Host $Title -ForegroundColor Gray -NoNewline
+        Write-Host " " -ForegroundColor DarkCyan -NoNewline
+        $len = 5 + (Get-DisplayWidth $Title) + 1
+        $rem = [Math]::Max(3, ($TotalWidth - $len))
+        Write-Host ("─" * $rem) -ForegroundColor DarkCyan
+    }
 }
 
 $Global:InPipeline = $false
@@ -281,26 +329,40 @@ function Show-QuickActionMenu {
         return $null
     }
 
-    Write-Host (T '  ┌─ 快捷操作面板 (Quick Action) ─────────────────────────────────' '  ┌─ Quick Action Panel ──────────────────────────────────────────') -ForegroundColor DarkCyan
-    Write-Host (T '  │  [Enter] 正常启动      [F] 极速秒启      [R] 强制重装' '  │  [Enter] Start Normal   [F] Fast Launch   [R] Force Reinstall') -ForegroundColor Gray
-    Write-Host (T '  │  [C]     清理重置      [S] 快捷方式      [H] 帮助文档      [Q] 安全退出' '  │  [C]     Clean/Reset    [S] Shortcut      [H] Help Manual   [Q] Exit') -ForegroundColor Gray
+    Write-BoxHeader -Title (T '快捷操作面板' 'Quick Action Panel') -BadgeText 'QUICK ACTION' -BadgeBg DarkCyan -BadgeFg Black
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host ' Enter ' -BackgroundColor Cyan -ForegroundColor Black -NoNewline
+    Write-Host (T ' 正常启动     ' ' Start Normal     ') -ForegroundColor Gray -NoNewline
+    Write-Host ' F ' -BackgroundColor DarkCyan -ForegroundColor Black -NoNewline
+    Write-Host (T ' 极速秒启     ' ' Fast Launch     ') -ForegroundColor Gray -NoNewline
+    Write-Host ' R ' -BackgroundColor DarkYellow -ForegroundColor Black -NoNewline
+    Write-Host (T ' 强制重装' ' Reinstall') -ForegroundColor Gray
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host ' C ' -BackgroundColor DarkMagenta -ForegroundColor White -NoNewline
+    Write-Host (T ' 清理重置    ' ' Clean/Reset    ') -ForegroundColor Gray -NoNewline
+    Write-Host ' S ' -BackgroundColor DarkGreen -ForegroundColor White -NoNewline
+    Write-Host (T ' 桌面快捷    ' ' Shortcut       ') -ForegroundColor Gray -NoNewline
+    Write-Host ' H ' -BackgroundColor DarkGray -ForegroundColor White -NoNewline
+    Write-Host (T ' 帮助手册    ' ' Help Manual    ') -ForegroundColor Gray -NoNewline
+    Write-Host ' Q ' -BackgroundColor DarkRed -ForegroundColor White -NoNewline
+    Write-Host (T ' 安全退出' ' Exit') -ForegroundColor Gray
     Write-Host '  │' -ForegroundColor DarkCyan
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $selectedKey = $null
-    $lastSec = -1
 
     while ($sw.Elapsed.TotalSeconds -lt 3) {
-        $remaining = [Math]::Ceiling(3 - $sw.Elapsed.TotalSeconds)
-        if ($remaining -ne $lastSec) {
-            $lastSec = $remaining
-            $msg = if ($Global:IsEnglish) {
-                "`r  │  Auto-starting in {0}s... [ {0}s ] " -f $remaining
-            } else {
-                "`r  │  倒计时 {0} 秒自动启动... [ {0}s ] " -f $remaining
-            }
-            Write-Host -NoNewline $msg
-        }
+        $remaining = [Math]::Max(0.0, 3.0 - $sw.Elapsed.TotalSeconds)
+        $filled = [int][Math]::Round(16 * ($remaining / 3.0))
+        $empty = 16 - $filled
+        Write-Host "`r  │  " -NoNewline -ForegroundColor DarkCyan
+        Write-Host (T '倒计时 ' 'Countdown ') -NoNewline -ForegroundColor Gray
+        Write-Host '❯ ' -NoNewline -ForegroundColor Cyan
+        Write-Host '[' -NoNewline -ForegroundColor DarkGray
+        Write-Host ('■' * $filled) -NoNewline -ForegroundColor Cyan
+        Write-Host ('·' * $empty) -NoNewline -ForegroundColor DarkGray
+        Write-Host ("] {0:N1}s  " -f $remaining) -NoNewline -ForegroundColor White
+
         try {
             if ([Console]::KeyAvailable) {
                 $keyInfo = [Console]::ReadKey($true)
@@ -314,16 +376,20 @@ function Show-QuickActionMenu {
         } catch { break }
         Start-Sleep -Milliseconds 60
     }
-    $actionMsg = switch -Regex ($selectedKey) {
-        '(?i)f' { T "`r  │  已选择：极速秒启模式...                         " "`r  │  Selected: Fast Launch...                       " }
-        '(?i)r' { T "`r  │  已选择：强制重装模式...                         " "`r  │  Selected: Force Reinstall...                   " }
-        '(?i)c' { T "`r  │  已选择：清理便携环境...                         " "`r  │  Selected: Clean & Reset...                     " }
-        '(?i)s' { T "`r  │  已选择：创建桌面快捷方式...                     " "`r  │  Selected: Create Shortcut...                   " }
-        '(?i)h' { T "`r  │  已选择：查看命令帮助...                         " "`r  │  Selected: Show Help...                         " }
-        '(?i)q' { T "`r  │  已取消操作，正在退出...                         " "`r  │  Operation canceled, exiting...                 " }
-        default { T "`r  │  正在启动服务...                                 " "`r  │  Starting service...                            " }
+
+    $desc = switch -Regex ($selectedKey) {
+        '(?i)f' { T '极速秒启模式 (Fast Launch)' 'Fast Launch Mode' }
+        '(?i)r' { T '强制重装模式 (Force Reinstall)' 'Force Reinstall Mode' }
+        '(?i)c' { T '清理便携环境 (Clean & Reset)' 'Clean & Reset Mode' }
+        '(?i)s' { T '创建桌面快捷方式 (Create Shortcut)' 'Create Desktop Shortcut' }
+        '(?i)h' { T '查看命令帮助文档 (Command Help)' 'Show Help Manual' }
+        '(?i)q' { T '操作已取消，安全退出 (Exiting)' 'Operation Canceled, Exiting' }
+        default { T '默认正常启动 (Normal Launch)' 'Default Normal Launch' }
     }
-    Write-Host $actionMsg -ForegroundColor DarkCyan
+    Write-Host "`r  │  " -NoNewline -ForegroundColor DarkCyan
+    Write-Host (T '模式选定 ' 'Selected ') -NoNewline -ForegroundColor Gray
+    Write-Host '❯ ' -NoNewline -ForegroundColor Cyan
+    Write-Host ("{0}" -f $desc).PadRight(44) -ForegroundColor White
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 
@@ -414,7 +480,7 @@ function Show-StatusCard {
     $hwSpec = Get-HardwareSpecSummary
     $archText = if ($hwSpec) { ("Win ({0} · {1})" -f $Arch, $hwSpec) } else { ("Windows ({0})" -f $Arch) }
 
-    Write-Host (T '  ┌─ 运行状态看板 (Runtime Matrix) ───────────────────────────────' '  ┌─ Runtime Matrix ──────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-BoxHeader -Title (T '运行状态看板' 'Runtime Matrix') -BadgeText 'ACTIVE' -BadgeBg DarkCyan -BadgeFg Black
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '系统架构 ' 'Platform ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
@@ -447,7 +513,7 @@ function Show-Banner {
     Write-Host "H A R N E S S        " -NoNewline -ForegroundColor White
     Write-Host $verBadge -ForegroundColor Cyan
     Write-Host ''
-    Write-Host (T '  ┌─ 一键极速部署管理器 ──────────────────────────────────────────' '  ┌─ One-Click Deployment Manager ────────────────────────────────') -ForegroundColor DarkCyan
+    Write-BoxHeader -Title (T '一键极速部署管理器' 'One-Click Deployment Manager') -BadgeText 'PORTABLE' -BadgeBg Cyan -BadgeFg Black
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host '●' -ForegroundColor Cyan -NoNewline
     Write-Host (T ' 便携运行环境  ' ' Portable Runtime  ') -ForegroundColor Gray -NoNewline
@@ -469,38 +535,54 @@ function Show-Dashboard {
     $lanIp = Get-LocalLanIp
 
     Write-Host ''
-    Write-Host (T '  ┌─ 网页服务就绪 (Service Ready) ────────────────────────────────' '  ┌─ Service Ready ───────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-BoxHeader -Title (T '网页服务就绪' 'Service Ready') -BadgeText 'ONLINE' -BadgeBg Green -BadgeFg Black
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '➜ 本机电脑 (Local PC):' '➜ Local PC:') -ForegroundColor Cyan
+    Write-Host '▌ ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '本机电脑访问 (Local PC)' 'Local PC Access') -ForegroundColor White
     Write-Host '  │    ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor White
+    Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
     if ($lanIp) {
         Write-Host '  │' -ForegroundColor DarkCyan
         Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-        Write-Host (T '➜ 手机/平板 (Mobile & LAN):' '➜ Mobile & LAN:') -ForegroundColor Green
+        Write-Host '▌ ' -ForegroundColor Green -NoNewline
+        Write-Host (T '手机/平板/局域网访问 (Mobile & LAN)' 'Mobile & LAN Access') -ForegroundColor White
         Write-Host '  │    ' -ForegroundColor DarkCyan -NoNewline
-        Write-Host ("http://{0}:{1}" -f $lanIp, $Port) -ForegroundColor White -NoNewline
+        Write-Host ("http://{0}:{1}" -f $lanIp, $Port) -ForegroundColor Green -NoNewline
         Write-Host (T '  (同一 Wi-Fi 局域网可用)' '  (Same Wi-Fi network)') -ForegroundColor DarkGray
     }
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host (T '  ├─ 快捷指引 (Quick Guide) ──────────────────────────────────────' '  ├─ Quick Guide ─────────────────────────────────────────────────') -ForegroundColor DarkCyan
-    Write-Host (T '  │  • 浏览器：默认浏览器已尝试自动打开，亦可点击上方链接访问' '  │  • Browser: Local browser opened automatically, or click above URL') -ForegroundColor Gray
-    Write-Host (T '  │  • 令牌认证：如首次进入需登录，请使用下方日志包含 ?token= 的完整网址' '  │  • Token: If authentication needed, copy full URL with ?token= below') -ForegroundColor Gray
+    Write-BoxDivider -Title (T '快捷使用指引' 'Quick Guide')
+    Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host (T '自动唤醒 ' 'Browser   ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '默认浏览器已自动尝试打开，亦可点击上方链接访问' 'Default browser opened automatically, or click above URL') -ForegroundColor DarkGray
+    Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host (T '令牌认证 ' 'Token     ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '如首次进入需登录，请复制下方日志中包含 ?token= 的完整网址' 'If authentication is required, copy full URL with ?token= below') -ForegroundColor DarkGray
     if ($lanIp) {
-        Write-Host (T '  │  • 手机访问：手机连接同 Wi-Fi 即可打开；若超时请确认防火墙放行' '  │  • Mobile: Connect same Wi-Fi; check Windows Firewall if unreachable') -ForegroundColor Gray
+        Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host (T '手机访问 ' 'Mobile    ') -ForegroundColor Gray -NoNewline
+        Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+        Write-Host (T '手机与电脑连接同一 Wi-Fi 即可打开；若超时请放行防火墙' 'Connect same Wi-Fi; check Windows Firewall if unreachable') -ForegroundColor DarkGray
     }
-    Write-Host (T '  │  • 保持与退出：请保持此窗口常驻；按 Ctrl + C 可安全停止服务' '  │  • Keep Alive: Keep this window running; press Ctrl + C to safely stop') -ForegroundColor Gray
+    Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host (T '服务保持 ' 'Control   ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '请保持此窗口常驻运行；按 Ctrl + C 可安全停止服务' 'Keep this window running; press Ctrl + C to stop server') -ForegroundColor DarkGray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
 function Show-Help {
     Write-Host ''
-    Write-Host (T '  ┌─ 命令参数说明 (Command Line Manual) ──────────────────────────' '  ┌─ Command Line Manual ─────────────────────────────────────────') -ForegroundColor DarkCyan
-    Write-Host (T '  │  用法: dsh-setup.bat [选项]' '  │  Usage: dsh-setup.bat [options]') -ForegroundColor White
+    Write-BoxHeader -Title (T '命令参数说明' 'Command Line Manual') -BadgeText 'MANUAL' -BadgeBg DarkCyan -BadgeFg Black
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host (T '用法: ' 'Usage: ') -ForegroundColor Gray -NoNewline
+    Write-Host (T 'dsh-setup.bat [选项]' 'dsh-setup.bat [options]') -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host (T '  │  选项列表 (Options):' '  │  Options:') -ForegroundColor Cyan
+    Write-BoxDivider -Title (T '可用选项列表' 'Available Options')
     Write-Host (T '  │    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' '  │    --install-only        Install/update and probe, without starting web') -ForegroundColor Gray
     Write-Host (T '  │    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' '  │    --fast, --skip-check  Fast mode: skip update checks, launch instantly') -ForegroundColor Gray
     Write-Host (T '  │    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' '  │    --reinstall, --update Force reinstall: re-fetch and rebuild dependencies') -ForegroundColor Gray
@@ -1301,7 +1383,7 @@ function Main {
         Write-Notice (T '未检测到 Visual C++ 2015-2022 运行库，如遇启动异常请安装：https://aka.ms/vs/17/release/vc_redist.x64.exe' 'Visual C++ runtime not detected. If native probes fail, install: https://aka.ms/vs/17/release/vc_redist.x64.exe')
     }
 
-    Write-Host (T '  ┌─ 部署流水线 (Deployment Pipeline) ────────────────────────────' '  ┌─ Deployment Pipeline ─────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-BoxHeader -Title (T '部署流水线' 'Deployment Pipeline') -BadgeText 'PIPELINE' -BadgeBg DarkCyan -BadgeFg Black
     Write-Host '  │' -ForegroundColor DarkCyan
     $Global:InPipeline = $true
 
