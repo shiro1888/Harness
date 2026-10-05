@@ -170,19 +170,31 @@ function Format-ElapsedText {
     return ("{0}ms" -f $Milliseconds)
 }
 
+$Global:InPipeline = $false
+
 function Write-TimedLine {
     param(
         [string]$Prefix,
         [string]$Title,
         [int]$ElapsedMs,
-        [int]$TargetWidth = 62
+        [int]$TargetWidth = 66
     )
-    $fullTitle = "$Prefix$Title"
-    $w = Get-DisplayWidth $fullTitle
+    $cleanPrefix = $Prefix.TrimStart()
+    $isSub = ($Prefix -match '^\s*[├└]─')
+    $renderedPrefix = if ($isSub) { "  │  │  $cleanPrefix" } else { "  │  $cleanPrefix" }
+    $w = Get-DisplayWidth "$renderedPrefix$Title"
     $dots = "." * [Math]::Max(3, ($TargetWidth - $w))
     $timeText = Format-ElapsedText $ElapsedMs
-    Write-Host $Prefix -ForegroundColor Cyan -NoNewline
-    Write-Host $Title -ForegroundColor White -NoNewline
+
+    if ($isSub) {
+        Write-Host "  │  │  " -ForegroundColor DarkCyan -NoNewline
+        Write-Host $cleanPrefix -ForegroundColor DarkGray -NoNewline
+        Write-Host $Title -ForegroundColor Gray -NoNewline
+    } else {
+        Write-Host "  │  " -ForegroundColor DarkCyan -NoNewline
+        Write-Host $cleanPrefix -ForegroundColor Cyan -NoNewline
+        Write-Host $Title -ForegroundColor White -NoNewline
+    }
     Write-Host " $dots " -ForegroundColor DarkGray -NoNewline
     Write-Host "[✓ $timeText]" -ForegroundColor Green
 }
@@ -196,23 +208,41 @@ function Write-Step {
 
 function Write-Ok {
     param([string]$Text)
-    Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
-    Write-Host '[✓] ' -ForegroundColor Green -NoNewline
-    Write-Host $Text -ForegroundColor White
+    if ($Global:InPipeline) {
+        Write-Host '  │  │  ├─ ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host '[✓] ' -ForegroundColor Green -NoNewline
+        Write-Host $Text -ForegroundColor White
+    } else {
+        Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+        Write-Host '[✓] ' -ForegroundColor Green -NoNewline
+        Write-Host $Text -ForegroundColor White
+    }
 }
 
 function Write-Info {
     param([string]$Text)
-    Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
-    Write-Host '[i] ' -ForegroundColor Cyan -NoNewline
-    Write-Host $Text -ForegroundColor Gray
+    if ($Global:InPipeline) {
+        Write-Host '  │  │  ├─ ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host '[i] ' -ForegroundColor Cyan -NoNewline
+        Write-Host $Text -ForegroundColor Gray
+    } else {
+        Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+        Write-Host '[i] ' -ForegroundColor Cyan -NoNewline
+        Write-Host $Text -ForegroundColor Gray
+    }
 }
 
 function Write-Notice {
     param([string]$Text)
-    Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
-    Write-Host '[!] ' -ForegroundColor Yellow -NoNewline
-    Write-Host $Text -ForegroundColor Yellow
+    if ($Global:InPipeline) {
+        Write-Host '  │  │  ├─ ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host '[!] ' -ForegroundColor Yellow -NoNewline
+        Write-Host $Text -ForegroundColor Yellow
+    } else {
+        Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
+        Write-Host '[!] ' -ForegroundColor Yellow -NoNewline
+        Write-Host $Text -ForegroundColor Yellow
+    }
 }
 
 function Write-Fail {
@@ -251,9 +281,9 @@ function Show-QuickActionMenu {
         return $null
     }
 
-    Write-Host (T '  ┌─ 快捷操作面板 ──────────────────────────────────────────────────────' '  ┌─ Quick Action Panel ────────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  ┌─ 快捷操作面板 (Quick Action) ─────────────────────────────────' '  ┌─ Quick Action Panel ──────────────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host (T '  │  [Enter] 正常启动      [F] 极速秒启      [R] 强制重装' '  │  [Enter] Start Normal   [F] Fast Launch   [R] Force Reinstall') -ForegroundColor Gray
-    Write-Host (T '  │  [C]     清理重置      [S] 快捷方式      [H] 帮助文档      [Q] 退出' '  │  [C]     Clean/Reset    [S] Shortcut      [H] Help Manual   [Q] Exit') -ForegroundColor Gray
+    Write-Host (T '  │  [C]     清理重置      [S] 快捷方式      [H] 帮助文档      [Q] 安全退出' '  │  [C]     Clean/Reset    [S] Shortcut      [H] Help Manual   [Q] Exit') -ForegroundColor Gray
     Write-Host '  │' -ForegroundColor DarkCyan
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -294,7 +324,7 @@ function Show-QuickActionMenu {
         default { T "`r  │  正在启动服务...                                 " "`r  │  Starting service...                            " }
     }
     Write-Host $actionMsg -ForegroundColor DarkCyan
-    Write-Host '  └─────────────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 
     return $selectedKey
@@ -319,12 +349,11 @@ function Start-WebHeartbeatPing {
                     if ($null -ne $resp) {
                         $resp.Close()
                         Write-Host ''
-                        Write-Host '    ├─ ' -ForegroundColor DarkGray -NoNewline
-                        Write-Host '[✓] ' -ForegroundColor Green -NoNewline
+                        Write-Host '  ● ' -ForegroundColor Green -NoNewline
                         $msg = if ($isEn) {
-                            ("Web heartbeat alive, local HTTP responded in {0:N1}s." -f $sw.Elapsed.TotalSeconds)
+                            ("Web heartbeat alive: local HTTP responded in {0:N1}s." -f $sw.Elapsed.TotalSeconds)
                         } else {
-                            ("Web 服务活跃心跳正常，已成功响应本地 HTTP 请求 (耗时 {0:N1}s)。" -f $sw.Elapsed.TotalSeconds)
+                            ("Web 活跃心跳探测正常：本地 HTTP 服务已于 {0:N1}s 成功握手响应。" -f $sw.Elapsed.TotalSeconds)
                         }
                         Write-Host $msg -ForegroundColor White
                         break
@@ -385,22 +414,29 @@ function Show-StatusCard {
     $hwSpec = Get-HardwareSpecSummary
     $archText = if ($hwSpec) { ("Win ({0} · {1})" -f $Arch, $hwSpec) } else { ("Windows ({0})" -f $Arch) }
 
-    Write-Host (T '  ┌─ 运行状态看板 ──────────────────────────────────────────────────────' '  ┌─ Runtime Status Matrix ─────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  ┌─ 运行状态看板 (Runtime Matrix) ───────────────────────────────' '  ┌─ Runtime Matrix ──────────────────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '架构硬件: ' 'Platform:   ') -ForegroundColor Gray -NoNewline
-    Write-Host $archText.PadRight(22) -ForegroundColor White -NoNewline
-    Write-Host (T '便携运行时: ' 'Runtime:    ') -ForegroundColor Gray -NoNewline
+    Write-Host (T '系统架构 ' 'Platform ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+    Write-Host $archText.PadRight(21) -ForegroundColor White -NoNewline
+    Write-Host (T '便携引擎 ' 'Runtime  ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
     Write-Host ("Node.js {0}" -f $NodeVer) -ForegroundColor White
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '核心版本: ' 'Version:    ') -ForegroundColor Gray -NoNewline
-    Write-Host ("v{0}" -f $DshVer).PadRight(22) -ForegroundColor Cyan -NoNewline
-    Write-Host (T '镜像加速:   ' 'Mirror:     ') -ForegroundColor Gray -NoNewline
+    Write-Host (T '核心版本 ' 'Version  ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+    Write-Host ("v{0}" -f $DshVer).PadRight(21) -ForegroundColor Cyan -NoNewline
+    Write-Host (T '网络加速 ' 'Mirror   ') -ForegroundColor Gray -NoNewline
+    Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
     Write-Host ("{0}" -f $MirrorSource) -ForegroundColor Green
-    Write-Host '  └─────────────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
 function Show-Banner {
+    $verText = Get-InstalledDshVersion
+    $verBadge = if ($verText) { "v$verText" } else { "Installer" }
+
     Write-Host ''
     Write-Host "    ____                  ____            _    " -ForegroundColor Cyan
     Write-Host "   |  _ \  ___  ___ _ __ / ___|  ___  ___| | __" -ForegroundColor Cyan
@@ -408,10 +444,19 @@ function Show-Banner {
     Write-Host "   | |_| |  __/  __/ |_) |___) |  __/  __/   < " -ForegroundColor DarkCyan
     Write-Host "   |____/ \___|\___| .__/ |____/ \___|\___|_|\_\" -ForegroundColor Blue
     Write-Host "                   |_|   " -NoNewline -ForegroundColor Blue
-    Write-Host "H A R N E S S         " -ForegroundColor White
+    Write-Host "H A R N E S S        " -NoNewline -ForegroundColor White
+    Write-Host $verBadge -ForegroundColor Cyan
     Write-Host ''
-    Write-Host (T '  ┌─ 一键部署管理器 ──────────────────────────────────────────────' '  ┌─ One-Click Deployment Manager ────────────────────────────────') -ForegroundColor DarkCyan
-    Write-Host (T '  │  便携运行环境 · 自动镜像加速 · 完整依赖自检 · 极速启动' '  │  Portable Runtime · Auto Mirror · Dependency Probe · Fast Start') -ForegroundColor Gray
+    Write-Host (T '  ┌─ 一键极速部署管理器 ──────────────────────────────────────────' '  ┌─ One-Click Deployment Manager ────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host '●' -ForegroundColor Cyan -NoNewline
+    Write-Host (T ' 便携运行环境  ' ' Portable Runtime  ') -ForegroundColor Gray -NoNewline
+    Write-Host '●' -ForegroundColor Cyan -NoNewline
+    Write-Host (T ' 自动镜像加速  ' ' Mirror Accelerated  ') -ForegroundColor Gray -NoNewline
+    Write-Host '●' -ForegroundColor Cyan -NoNewline
+    Write-Host (T ' 原生依赖自检  ' ' Native Probes  ') -ForegroundColor Gray -NoNewline
+    Write-Host '●' -ForegroundColor Cyan -NoNewline
+    Write-Host (T ' 双端局域网访问' ' Dual-Network Ready') -ForegroundColor Gray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
@@ -424,37 +469,38 @@ function Show-Dashboard {
     $lanIp = Get-LocalLanIp
 
     Write-Host ''
-    Write-Host '  ┌───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-Host (T '  ┌─ 网页服务就绪 (Service Ready) ────────────────────────────────' '  ┌─ Service Ready ───────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host '  │' -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '[✓] DeepSeek Harness 网页服务已就绪！' '[✓] DeepSeek Harness Web Service Ready!') -ForegroundColor Green
-    Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host (T '  │  ➜ 本机电脑:   ' '  │  ➜ Local (PC): ') -ForegroundColor Gray -NoNewline
-    Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
+    Write-Host (T '➜ 本机电脑 (Local PC):' '➜ Local PC:') -ForegroundColor Cyan
+    Write-Host '  │    ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor White
     if ($lanIp) {
-        Write-Host (T '  │  ➜ 手机/平板:  ' '  │  ➜ Mobile/LAN: ') -ForegroundColor Gray -NoNewline
-        Write-Host ("http://{0}:{1}" -f $lanIp, $Port) -ForegroundColor Green -NoNewline
-        Write-Host (T ' (同一 Wi-Fi 局域网)' ' (Same Wi-Fi network)') -ForegroundColor DarkGray
+        Write-Host '  │' -ForegroundColor DarkCyan
+        Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host (T '➜ 手机/平板 (Mobile & LAN):' '➜ Mobile & LAN:') -ForegroundColor Green
+        Write-Host '  │    ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host ("http://{0}:{1}" -f $lanIp, $Port) -ForegroundColor White -NoNewline
+        Write-Host (T '  (同一 Wi-Fi 局域网可用)' '  (Same Wi-Fi network)') -ForegroundColor DarkGray
     }
-    Write-Host (T '  │  ➜ 核心版本:   ' '  │  ➜ Version:    ') -ForegroundColor Gray -NoNewline
-    Write-Host (T ("v{0} (便携运行时)" -f $Version) ("v{0} (Portable)" -f $Version)) -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host (T '  │  使用提示:' '  │  Usage Tips:') -ForegroundColor Yellow
-    Write-Host (T '  │  · 电脑端：默认浏览器将自动尝试打开本地访问地址' '  │  · PC: Browser will open local URL automatically') -ForegroundColor Gray
+    Write-Host (T '  ├─ 快捷指引 (Quick Guide) ──────────────────────────────────────' '  ├─ Quick Guide ─────────────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  │  • 浏览器：默认浏览器已尝试自动打开，亦可点击上方链接访问' '  │  • Browser: Local browser opened automatically, or click above URL') -ForegroundColor Gray
+    Write-Host (T '  │  • 令牌认证：如首次进入需登录，请使用下方日志包含 ?token= 的完整网址' '  │  • Token: If authentication needed, copy full URL with ?token= below') -ForegroundColor Gray
     if ($lanIp) {
-        Write-Host (T '  │  · 手机端：连接同一 Wi-Fi，在手机浏览器中打开上方手机地址' '  │  · Mobile: Connect same Wi-Fi and open mobile URL in browser') -ForegroundColor Gray
+        Write-Host (T '  │  • 手机访问：手机连接同 Wi-Fi 即可打开；若超时请确认防火墙放行' '  │  • Mobile: Connect same Wi-Fi; check Windows Firewall if unreachable') -ForegroundColor Gray
     }
-    Write-Host (T '  │  · 若未自动弹出，请复制下方日志中包含 ?token= 的完整链接' '  │  · Or copy the full URL with ?token= from log below') -ForegroundColor Gray
-    Write-Host (T '  │  · 运行期间请保持此窗口开启；按 Ctrl + C 可安全停止服务' '  │  · Keep this window open; Press Ctrl + C to safely stop') -ForegroundColor Gray
+    Write-Host (T '  │  • 保持与退出：请保持此窗口常驻；按 Ctrl + C 可安全停止服务' '  │  • Keep Alive: Keep this window running; press Ctrl + C to safely stop') -ForegroundColor Gray
     Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
 function Show-Help {
     Write-Host ''
-    Write-Host (T '  ┌─ 命令参数说明 ────────────────────────────────────────────────' '  ┌─ Command Line Options ────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host (T '  ┌─ 命令参数说明 (Command Line Manual) ──────────────────────────' '  ┌─ Command Line Manual ─────────────────────────────────────────') -ForegroundColor DarkCyan
     Write-Host (T '  │  用法: dsh-setup.bat [选项]' '  │  Usage: dsh-setup.bat [options]') -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host (T '  │  选项列表:' '  │  Options:') -ForegroundColor Cyan
+    Write-Host (T '  │  选项列表 (Options):' '  │  Options:') -ForegroundColor Cyan
     Write-Host (T '  │    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' '  │    --install-only        Install/update and probe, without starting web') -ForegroundColor Gray
     Write-Host (T '  │    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' '  │    --fast, --skip-check  Fast mode: skip update checks, launch instantly') -ForegroundColor Gray
     Write-Host (T '  │    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' '  │    --reinstall, --update Force reinstall: re-fetch and rebuild dependencies') -ForegroundColor Gray
@@ -1255,6 +1301,10 @@ function Main {
         Write-Notice (T '未检测到 Visual C++ 2015-2022 运行库，如遇启动异常请安装：https://aka.ms/vs/17/release/vc_redist.x64.exe' 'Visual C++ runtime not detected. If native probes fail, install: https://aka.ms/vs/17/release/vc_redist.x64.exe')
     }
 
+    Write-Host (T '  ┌─ 部署流水线 (Deployment Pipeline) ────────────────────────────' '  ┌─ Deployment Pipeline ─────────────────────────────────────────') -ForegroundColor DarkCyan
+    Write-Host '  │' -ForegroundColor DarkCyan
+    $Global:InPipeline = $true
+
     $nodeMeta = Ensure-PortableNode
     $env:PATH = "$NodeRoot;$env:PATH"
 
@@ -1263,23 +1313,32 @@ function Main {
         throw "npm 无法运行：$npmVersion"
     }
 
+    Write-Host '  │  │' -ForegroundColor DarkCyan
     $dshMeta = Ensure-LatestDsh
     $dshVersion = $dshMeta.Version
 
     if ($env:DSH_SETUP_INSTALL_ONLY -eq '1') {
+        Write-Host '  │  │' -ForegroundColor DarkCyan
         Write-TimedLine -Prefix "  ● [3/3] " -Title (T '安装校验模式完成（不启动网页服务）' 'Installation verified (service not started)') -ElapsedMs 0
+        Write-Host '  │' -ForegroundColor DarkCyan
+        Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
         Write-Host ''
+        $Global:InPipeline = $false
         Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
         Write-Info (T ('后续随时可手动运行："{0}" web 启动服务。' -f $DshCmd) ('Run "{0}" web to start server anytime.' -f $DshCmd))
         return
     }
 
+    Write-Host '  │  │' -ForegroundColor DarkCyan
     $swPort = [Diagnostics.Stopwatch]::StartNew()
     $port = Get-WebPort
     $swPort.Stop()
     Write-TimedLine -Prefix "  ● [3/3] " -Title (T ("本地 Web 服务端口就绪 (Port {0})" -f $port) ("Local web port ready (Port {0})" -f $port)) -ElapsedMs $swPort.ElapsedMilliseconds
-
+    Write-Host '  │' -ForegroundColor DarkCyan
+    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
     Write-Host ''
+    $Global:InPipeline = $false
+
     Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
     Show-Dashboard -Version $dshVersion -Port $port
 
@@ -1306,6 +1365,7 @@ try {
     Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
     exit 0
 } catch {
+    $Global:InPipeline = $false
     Write-Host ''
     Write-Fail (T ("运行遇到错误：{0}" -f $_.Exception.Message) ("Execution error: {0}" -f $_.Exception.Message))
     Wait-ForClose (T '请查看上方错误信息，然后按回车键关闭窗口...' 'Please check error message above, then press Enter to exit...')
