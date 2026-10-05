@@ -1342,7 +1342,7 @@ function Main {
             'r' { $env:DSH_SETUP_REINSTALL = '1' }
             'c' { $env:DSH_SETUP_CLEAN = '1' }
             's' { $env:DSH_SETUP_SHORTCUT = '1' }
-            'h' { Show-Help; exit 0 }
+            'h' { Show-Help; Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...'); exit 0 }
             'q' { exit 0 }
         }
     }
