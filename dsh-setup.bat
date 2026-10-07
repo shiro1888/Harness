@@ -187,6 +187,18 @@ function Format-ElapsedText {
     return ("{0}ms" -f $Milliseconds)
 }
 
+function Format-SessionDuration {
+    param([long]$Milliseconds)
+    $ts = [TimeSpan]::FromMilliseconds($Milliseconds)
+    if ($ts.TotalHours -ge 1) {
+        return ("{0}h{1:00}m" -f [int]$ts.TotalHours, $ts.Minutes)
+    }
+    if ($ts.TotalMinutes -ge 1) {
+        return ("{0}m{1:00}s" -f [int]$ts.TotalMinutes, $ts.Seconds)
+    }
+    return ("{0}s" -f [int]$ts.TotalSeconds)
+}
+
 function Write-BoxHeader {
     param(
         [string]$Title,
@@ -228,6 +240,11 @@ function Write-BoxDivider {
     }
 }
 
+function Write-BoxFooter {
+    param([int]$TotalWidth = 66)
+    Write-Host ("  └{0}" -f ("─" * ($TotalWidth - 3))) -ForegroundColor DarkCyan
+}
+
 $Global:InPipeline = $false
 
 function Write-TimedLine {
@@ -261,6 +278,15 @@ function Write-Step {
     param([string]$Text)
     Write-Host ''
     Write-Host '  ● ' -ForegroundColor Cyan -NoNewline
+    Write-Host $Text -ForegroundColor White
+}
+
+function Write-PipelineStep {
+    param([string]$Text)
+    # 流水线卡片内的步骤行：沿用 Write-Step 的视觉，但挂在卡片左边框内侧，
+    # 不再跳出到边框外打断卡片轮廓。
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host '● ' -ForegroundColor Cyan -NoNewline
     Write-Host $Text -ForegroundColor White
 }
 
@@ -400,7 +426,7 @@ function Show-QuickActionMenu {
     Write-Host (T '模式选定 ' 'Selected ') -NoNewline -ForegroundColor Gray
     Write-Host '❯ ' -NoNewline -ForegroundColor Cyan
     Write-Host ("{0}" -f $desc).PadRight(44) -ForegroundColor White
-    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-BoxFooter
     Write-Host ''
 
     return $selectedKey
@@ -472,7 +498,7 @@ function Get-HardwareSpecSummary {
             }
         } catch {}
         if ($memGb) {
-            return ("{0}C · {1}G" -f $cores, $memGb)
+            return ("{0}C/{1}G" -f $cores, $memGb)
         } elseif ($cores) {
             return ("{0} Cores" -f $cores)
         }
@@ -488,24 +514,29 @@ function Show-StatusCard {
         [string]$MirrorSource
     )
     $hwSpec = Get-HardwareSpecSummary
-    $archText = if ($hwSpec) { ("Win ({0} · {1})" -f $Arch, $hwSpec) } else { ("Windows ({0})" -f $Arch) }
+    $archText = if ($hwSpec) { ("Win {0} ({1})" -f $Arch, $hwSpec) } else { ("Windows {0}" -f $Arch) }
+    # 两列看板：第一列按显示宽度补齐到固定列位。.NET PadRight 按字符数计算，
+    # 遇到全角/宽字符时会错位，因此统一用 Get-DisplayWidth 计算填充。
+    $archPad = [Math]::Max(2, 22 - (Get-DisplayWidth $archText))
+    $verText = "v{0}" -f $DshVer
+    $verPad = [Math]::Max(2, 22 - (Get-DisplayWidth $verText))
 
     Write-BoxHeader -Title (T '运行状态看板' 'Runtime Matrix') -BadgeText 'ACTIVE' -BadgeBg DarkCyan -BadgeFg Black
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '系统架构 ' 'Platform ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host $archText.PadRight(21) -ForegroundColor White -NoNewline
+    Write-Host ('{0}{1}' -f $archText, (' ' * $archPad)) -ForegroundColor White -NoNewline
     Write-Host (T '便携引擎 ' 'Runtime  ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
     Write-Host ("Node.js {0}" -f $NodeVer) -ForegroundColor White
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '核心版本 ' 'Version  ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host ("v{0}" -f $DshVer).PadRight(21) -ForegroundColor Cyan -NoNewline
+    Write-Host ('{0}{1}' -f $verText, (' ' * $verPad)) -ForegroundColor Cyan -NoNewline
     Write-Host (T '网络加速 ' 'Mirror   ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
     Write-Host ("{0}" -f $MirrorSource) -ForegroundColor Green
-    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-BoxFooter
     Write-Host ''
 }
 
@@ -533,7 +564,7 @@ function Show-Banner {
     Write-Host (T ' 原生依赖自检  ' ' Native Probes  ') -ForegroundColor Gray -NoNewline
     Write-Host '●' -ForegroundColor Cyan -NoNewline
     Write-Host (T ' 双端局域网访问' ' Dual-Network Ready') -ForegroundColor Gray
-    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-BoxFooter
     Write-Host ''
 }
 
@@ -581,7 +612,7 @@ function Show-Dashboard {
     Write-Host (T '服务保持 ' 'Control   ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
     Write-Host (T '请保持此窗口常驻运行；按 Ctrl + C 可安全停止服务' 'Keep this window running; press Ctrl + C to stop server') -ForegroundColor DarkGray
-    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-BoxFooter
     Write-Host ''
 }
 
@@ -603,8 +634,30 @@ function Show-Help {
     Write-Host (T '  │    --no-open             启动服务后不自动调用浏览器打开网页' '  │    --no-open             Do not open browser automatically') -ForegroundColor Gray
     Write-Host (T '  │    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' '  │    --no-pause            Non-interactive mode, do not wait for enter key') -ForegroundColor Gray
     Write-Host (T '  │    --help, -h            显示此帮助信息' '  │    --help, -h            Show this help manual') -ForegroundColor Gray
-    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-BoxFooter
     Write-Host ''
+}
+
+function Show-TroubleshootingCard {
+    Write-Host ''
+    Write-BoxHeader -Title (T '排查建议' 'Troubleshooting') -BadgeText 'TIPS' -BadgeBg DarkYellow -BadgeFg Black
+    $tips = @(
+        @((T '网络超时或下载失败' 'Network timeout or download failed'),
+          (T '检查网络与代理后重试；已有本地版本可先用 --fast 离线启动' 'Check network/proxy and retry; use --fast to launch the local version offline')),
+        @((T '原生依赖自检失败' 'Native dependency probe failed'),
+          (T '运行 --reinstall 重新拉取核心组件并校验依赖' 'Run --reinstall to refetch the core package and re-probe')),
+        @((T '便携环境疑似损坏' 'Portable runtime seems broken'),
+          (T '运行 --clean 全量重置后重新部署' 'Run --clean to fully reset, then deploy again')),
+        @((T '参数用法疑问' 'Usage questions'),
+          (T '运行 --help 查看完整参数说明' 'Run --help for the full options list'))
+    )
+    foreach ($tip in $tips) {
+        Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
+        Write-Host ('{0} ' -f $tip[0]) -ForegroundColor Gray -NoNewline
+        Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
+        Write-Host $tip[1] -ForegroundColor DarkGray
+    }
+    Write-BoxFooter
 }
 
 function Wait-ForClose {
@@ -1009,7 +1062,9 @@ function Install-PortableNode {
     $release = Get-LatestNodeRelease -Architecture $Architecture
     $version = $release.Version
     $archiveName = "node-$version-win-$Architecture.zip"
-    $archivePath = Join-Path $RuntimeRoot (".$archiveName.download")
+    # Expand-Archive 只认 .zip 扩展名，临时文件必须以 .zip 结尾；
+    # .node-tmp- 前缀用于运行前自动清扫上次中断的残留。
+    $archivePath = Join-Path $RuntimeRoot (".node-tmp-{0}" -f $archiveName)
     $stagingRoot = Join-Path $RuntimeRoot (".node-install-{0}" -f $PID)
     $backupRoot = Join-Path $RuntimeRoot (".node-backup-{0}" -f $PID)
     $expandedNode = Join-Path $stagingRoot "node-$version-win-$Architecture"
@@ -1018,7 +1073,7 @@ function Install-PortableNode {
         "https://nodejs.org/dist/$version/$archiveName"
     )
 
-    Write-Step ("[1/3] 下载并准备便携 Node.js {0}（{1}）" -f $version, $Architecture)
+    Write-PipelineStep ("[1/3] 下载并准备便携 Node.js {0}（{1}）" -f $version, $Architecture)
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 
     try {
@@ -1085,7 +1140,7 @@ function Remove-StaleRuntimeArtifacts {
         (".node-backup-{0}" -f $PID)
     )
     $stale = Get-ChildItem -LiteralPath $RuntimeRoot -Force -ErrorAction SilentlyContinue | Where-Object {
-        ($_.Name -like '.node-install-*' -or $_.Name -like '.node-backup-*' -or $_.Name -like '*.download') -and
+        ($_.Name -like '.node-install-*' -or $_.Name -like '.node-backup-*' -or $_.Name -like '.node-tmp-*' -or $_.Name -like '*.download') -and
         ($currentArtifacts -notcontains $_.Name) -and
         ($_.LastWriteTime -lt $deadline)
     }
@@ -1130,7 +1185,21 @@ function Invoke-NpmWithOutput {
     $savedErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & $NpmCmd @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        & $NpmCmd @Arguments 2>&1 | ForEach-Object {
+            if ($Global:InPipeline) {
+                # npm 的行内输出统一挂到流水线左边框内，保持卡片视觉连续；
+                # 警告与错误按级别着色，避免淹没在 DarkGray 的细节里。
+                $lineColor = 'DarkGray'
+                if ("$_" -match 'npm (err|error)') {
+                    $lineColor = 'Red'
+                } elseif ("$_" -match 'npm warn') {
+                    $lineColor = 'Yellow'
+                }
+                Write-Host ("  │  │  {0}" -f $_) -ForegroundColor $lineColor
+            } else {
+                Write-Host $_
+            }
+        }
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $savedErrorAction
@@ -1379,6 +1448,7 @@ function Get-WebPort {
 }
 
 function Main {
+    $Global:SessionStopwatch = [Diagnostics.Stopwatch]::StartNew()
     if ($env:DSH_SETUP_HELP -eq '1') {
         Show-Help
         Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
@@ -1480,7 +1550,7 @@ function Main {
         Write-Host '  │  │' -ForegroundColor DarkCyan
         Write-TimedLine -Prefix "  ● [3/3] " -Title (T '安装校验模式完成（不启动网页服务）' 'Installation verified (service not started)') -ElapsedMs 0
         Write-Host '  │' -ForegroundColor DarkCyan
-        Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+        Write-BoxFooter
         Write-Host ''
         $Global:InPipeline = $false
         Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
@@ -1494,7 +1564,7 @@ function Main {
     $swPort.Stop()
     Write-TimedLine -Prefix "  ● [3/3] " -Title (T ("本地 Web 服务端口就绪 (Port {0})" -f $port) ("Local web port ready (Port {0})" -f $port)) -ElapsedMs $swPort.ElapsedMilliseconds
     Write-Host '  │' -ForegroundColor DarkCyan
-    Write-Host '  └───────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
+    Write-BoxFooter
     Write-Host ''
     $Global:InPipeline = $false
 
@@ -1516,7 +1586,7 @@ function Main {
         throw "DeepSeek Harness 服务异常停止，退出码：$webExitCode"
     }
 
-    Write-Notice (T 'DeepSeek Harness 服务已安全停止。' 'DeepSeek Harness service stopped safely.')
+    Write-Notice (T ("DeepSeek Harness 服务已安全停止（端口 {0} · 本次会话 {1}）" -f $port, (Format-SessionDuration $Global:SessionStopwatch.ElapsedMilliseconds)) ("DeepSeek Harness service stopped safely (port {0}, session {1})" -f $port, (Format-SessionDuration $Global:SessionStopwatch.ElapsedMilliseconds)))
 }
 
 try {
@@ -1524,9 +1594,14 @@ try {
     Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
     exit 0
 } catch {
-    $Global:InPipeline = $false
+    if ($Global:InPipeline) {
+        Write-Host '  │' -ForegroundColor DarkCyan
+        Write-BoxFooter
+        $Global:InPipeline = $false
+    }
     Write-Host ''
     Write-Fail (T ("运行遇到错误：{0}" -f $_.Exception.Message) ("Execution error: {0}" -f $_.Exception.Message))
+    Show-TroubleshootingCard
     Wait-ForClose (T '请查看上方错误信息，然后按回车键关闭窗口...' 'Please check error message above, then press Enter to exit...')
     exit 1
 }
