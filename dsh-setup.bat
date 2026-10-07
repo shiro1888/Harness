@@ -13,8 +13,14 @@ set "DSH_SETUP_HELP="
 set "DSH_SETUP_PORT="
 set "DSH_SETUP_LANG="
 set "DSH_SETUP_BAD_ARG="
+set "DSH_SETUP_ARG_CODE="
 
 :parse_arguments
+rem Keep this batch section pure ASCII: cmd.exe decodes this UTF-8 file with the
+rem legacy console codepage (e.g. GBK on zh-CN systems), so any non-ASCII text
+rem here gets mojibake'd (or even mis-parsed into phantom commands) before it can
+rem reach an environment variable. Localized messages are generated in the
+rem PowerShell section instead, which reads this file as UTF-8 directly.
 if "%~1"=="" goto run_installer
 if /I "%~1"=="--install-only"    set "DSH_SETUP_INSTALL_ONLY=1" & shift & goto parse_arguments
 if /I "%~1"=="--no-pause"        set "DSH_SETUP_NONINTERACTIVE=1" & shift & goto parse_arguments
@@ -38,12 +44,14 @@ goto parse_arguments
 :parse_port
 set "_val=%~2"
 if "%~2"=="" (
-    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--port 缺少端口数值"
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
+    if not defined DSH_SETUP_ARG_CODE set "DSH_SETUP_ARG_CODE=port-missing-value"
     shift
     goto parse_arguments
 )
 if "%_val:~0,1%"=="-" (
-    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--port 缺少端口数值"
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
+    if not defined DSH_SETUP_ARG_CODE set "DSH_SETUP_ARG_CODE=port-missing-value"
     shift
     goto parse_arguments
 )
@@ -55,12 +63,14 @@ goto parse_arguments
 :parse_lang
 set "_val=%~2"
 if "%~2"=="" (
-    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--lang 缺少语言选项 (zh/en)"
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
+    if not defined DSH_SETUP_ARG_CODE set "DSH_SETUP_ARG_CODE=lang-missing-value"
     shift
     goto parse_arguments
 )
 if "%_val:~0,1%"=="-" (
-    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=--lang 缺少语言选项 (zh/en)"
+    if not defined DSH_SETUP_BAD_ARG set "DSH_SETUP_BAD_ARG=%~1"
+    if not defined DSH_SETUP_ARG_CODE set "DSH_SETUP_ARG_CODE=lang-missing-value"
     shift
     goto parse_arguments
 )
@@ -756,7 +766,7 @@ function Get-LatestDshRelease {
     # 1. 如果用户指定了 --fast 或 --skip-check，且本地已有正常运行版本，直接跳过网络检查
     if ($env:DSH_SETUP_FAST -eq '1') {
         if (-not [string]::IsNullOrWhiteSpace($InstalledVersion) -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-            Write-Info '已启用极速模式 (--fast)，跳过在线版本检查，直接加载本地版本。'
+            Write-Info (T '已启用极速模式 (--fast)，跳过在线版本检查，直接加载本地版本。' 'Fast mode (--fast) enabled: skipping online version check, loading the local version.')
             return [pscustomobject]@{
                 Latest = $InstalledVersion
                 Registry = $null
@@ -943,6 +953,25 @@ function Invoke-SingleDownload {
     Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
 }
 
+function Test-ZipArchiveHeader {
+    param([string]$Path)
+
+    # 代理错误页、截断文件等也可能"存在且非空"，用 ZIP 魔数 (PK) 快速判别，
+    # 避免坏压缩包进入解压阶段才报错、且不再尝试下一个下载源。
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        try {
+            $header = New-Object byte[] 2
+            $read = $stream.Read($header, 0, 2)
+            return ($read -eq 2 -and $header[0] -eq 0x50 -and $header[1] -eq 0x4B)
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
 function Invoke-FileDownload {
     param(
         [string[]]$Uris,
@@ -961,6 +990,9 @@ function Invoke-FileDownload {
             $file = Get-Item -LiteralPath $Destination
             if ($file.Length -le 0) {
                 throw '下载结果为空文件'
+            }
+            if (-not (Test-ZipArchiveHeader -Path $Destination)) {
+                throw '下载结果不是有效的 Node.js 压缩包'
             }
             return
         } catch {
@@ -1039,7 +1071,36 @@ function Install-PortableNode {
     }
 }
 
+function Remove-StaleRuntimeArtifacts {
+    # 安装中途被强制关闭（窗口被杀、断电等）会留下 .node-install-* / .node-backup-* /
+    # *.download 残留，平时只有 --clean 全量重置才能清掉。这里在每次运行开始时自动
+    # 清扫 1 小时前的旧残留；只放行当前进程自己的暂存目录，1 小时阈值是为了
+    # 不误删并行实例正在使用的文件。
+    if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) {
+        return
+    }
+    $deadline = (Get-Date).AddHours(-1)
+    $currentArtifacts = @(
+        (".node-install-{0}" -f $PID),
+        (".node-backup-{0}" -f $PID)
+    )
+    $stale = Get-ChildItem -LiteralPath $RuntimeRoot -Force -ErrorAction SilentlyContinue | Where-Object {
+        ($_.Name -like '.node-install-*' -or $_.Name -like '.node-backup-*' -or $_.Name -like '*.download') -and
+        ($currentArtifacts -notcontains $_.Name) -and
+        ($_.LastWriteTime -lt $deadline)
+    }
+    foreach ($item in $stale) {
+        try {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force
+            Write-Info (T ("已自动清理上次运行残留：{0}" -f $item.Name) ("Auto-cleaned leftover from a previous run: {0}" -f $item.Name))
+        } catch {
+            # 残留文件仍被占用时跳过，不影响本次安装。
+        }
+    }
+}
+
 function Ensure-PortableNode {
+    Remove-StaleRuntimeArtifacts
     $swNode = [Diagnostics.Stopwatch]::StartNew()
     $architecture = Get-MachineArchitecture
     if ((Test-Path -LiteralPath $NodeExe -PathType Leaf) -and (Test-Path -LiteralPath $NpmCmd -PathType Leaf)) {
@@ -1082,6 +1143,11 @@ function Invoke-DshInstall {
         [string]$Version,
         [string]$Registry
     )
+
+    # 极速模式等离线路径拿不到 Registry 时兜底到官方源，避免把空的 --registry= 传给 npm。
+    if ([string]::IsNullOrWhiteSpace($Registry)) {
+        $Registry = 'https://registry.npmjs.org'
+    }
 
     $package = "@deepseek-ai/dsh@$Version"
     $arguments = @(
@@ -1315,11 +1381,22 @@ function Get-WebPort {
 function Main {
     if ($env:DSH_SETUP_HELP -eq '1') {
         Show-Help
+        Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
         exit 0
     }
 
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_BAD_ARG)) {
-        throw (T "不支持的参数：$($env:DSH_SETUP_BAD_ARG)。请使用 --help 查看支持的完整参数列表。" "Unsupported parameter: $($env:DSH_SETUP_BAD_ARG). Use --help for full options.")
+        switch ($env:DSH_SETUP_ARG_CODE) {
+            'port-missing-value' {
+                throw (T ("参数 {0} 后面需要跟一个端口号，例如 --port 3080。" -f $env:DSH_SETUP_BAD_ARG) ("Option {0} requires a port number, e.g. --port 3080." -f $env:DSH_SETUP_BAD_ARG))
+            }
+            'lang-missing-value' {
+                throw (T ("参数 {0} 后面需要跟语言选项 zh 或 en，例如 --lang en。" -f $env:DSH_SETUP_BAD_ARG) ("Option {0} requires a language option (zh or en), e.g. --lang en." -f $env:DSH_SETUP_BAD_ARG))
+            }
+            default {
+                throw (T ("不支持的参数：{0}。请使用 --help 查看支持的完整参数列表。" -f $env:DSH_SETUP_BAD_ARG) ("Unsupported parameter: {0}. Use --help for full options." -f $env:DSH_SETUP_BAD_ARG))
+            }
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $validatedPort = 0
