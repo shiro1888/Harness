@@ -556,14 +556,15 @@ function Show-Banner {
     Write-Host ''
     Write-BoxHeader -Title (T '一键极速部署管理器' 'One-Click Deployment Manager') -BadgeText 'PORTABLE' -BadgeBg Cyan -BadgeFg Black
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host '●' -ForegroundColor Cyan -NoNewline
-    Write-Host (T ' 便携运行环境  ' ' Portable Runtime  ') -ForegroundColor Gray -NoNewline
-    Write-Host '●' -ForegroundColor Cyan -NoNewline
-    Write-Host (T ' 自动镜像加速  ' ' Mirror Accelerated  ') -ForegroundColor Gray -NoNewline
-    Write-Host '●' -ForegroundColor Cyan -NoNewline
-    Write-Host (T ' 原生依赖自检  ' ' Native Probes  ') -ForegroundColor Gray -NoNewline
-    Write-Host '●' -ForegroundColor Cyan -NoNewline
-    Write-Host (T ' 双端局域网访问' ' Dual-Network Ready') -ForegroundColor Gray
+    Write-Host '● ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '便携隔离环境 (独立运行)    ' 'Portable Runtime (Isolated)   ') -ForegroundColor Gray -NoNewline
+    Write-Host '● ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '智能镜像加速 (并发竞速)' 'Mirror Racing (Fast)') -ForegroundColor Gray
+    Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
+    Write-Host '● ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '原生依赖自检 (Koffi/PTY)   ' 'Native Probes (Koffi & PTY)   ') -ForegroundColor Gray -NoNewline
+    Write-Host '● ' -ForegroundColor Cyan -NoNewline
+    Write-Host (T '双端访问就绪 (电脑/手机)' 'Dual-Network (LAN Ready)') -ForegroundColor Gray
     Write-BoxFooter
     Write-Host ''
 }
@@ -595,23 +596,23 @@ function Show-Dashboard {
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-BoxDivider -Title (T '快捷使用指引' 'Quick Guide')
     Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '自动唤醒 ' 'Browser   ') -ForegroundColor Gray -NoNewline
+    Write-Host (T '自动唤醒 ' 'Browser ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host (T '默认浏览器已自动尝试打开，亦可点击上方链接访问' 'Default browser opened automatically, or click above URL') -ForegroundColor DarkGray
+    Write-Host (T '浏览器已尝试唤起，亦可点击上方链接访问' 'Default browser opened; or click above URL') -ForegroundColor DarkGray
     Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '令牌认证 ' 'Token     ') -ForegroundColor Gray -NoNewline
+    Write-Host (T '令牌认证 ' 'Token   ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host (T '如首次进入需登录，请复制下方日志中包含 ?token= 的完整网址' 'If authentication is required, copy full URL with ?token= below') -ForegroundColor DarkGray
+    Write-Host (T '首次若需登录，复制下方日志中 ?token= 完整链接' 'If login required, copy full ?token= URL below') -ForegroundColor DarkGray
     if ($lanIp) {
         Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
-        Write-Host (T '手机访问 ' 'Mobile    ') -ForegroundColor Gray -NoNewline
+        Write-Host (T '手机访问 ' 'Mobile  ') -ForegroundColor Gray -NoNewline
         Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-        Write-Host (T '手机与电脑连接同一 Wi-Fi 即可打开；若超时请放行防火墙' 'Connect same Wi-Fi; check Windows Firewall if unreachable') -ForegroundColor DarkGray
+        Write-Host (T '手机连接同 Wi-Fi 即可访问；超时请放行防火墙' 'Connect same Wi-Fi; check firewall if timeout') -ForegroundColor DarkGray
     }
     Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host (T '服务保持 ' 'Control   ') -ForegroundColor Gray -NoNewline
+    Write-Host (T '服务保持 ' 'Control ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host (T '请保持此窗口常驻运行；按 Ctrl + C 可安全停止服务' 'Keep this window running; press Ctrl + C to stop server') -ForegroundColor DarkGray
+    Write-Host (T '请保持此窗口常驻；按 Ctrl + C 可安全停止服务' 'Keep window running; press Ctrl + C to stop') -ForegroundColor DarkGray
     Write-BoxFooter
     Write-Host ''
 }
@@ -624,16 +625,16 @@ function Show-Help {
     Write-Host (T 'dsh-setup.bat [选项]' 'dsh-setup.bat [options]') -ForegroundColor White
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-BoxDivider -Title (T '可用选项列表' 'Available Options')
-    Write-Host (T '  │    --install-only        仅安装/更新并完成依赖自检，不启动网页服务' '  │    --install-only        Install/update and probe, without starting web') -ForegroundColor Gray
-    Write-Host (T '  │    --fast, --skip-check  极速模式：跳过在线版本检查，直接秒启本地已有版本' '  │    --fast, --skip-check  Fast mode: skip update checks, launch instantly') -ForegroundColor Gray
-    Write-Host (T '  │    --reinstall, --update 强制重装模式：重新拉取最新版本并校验原生依赖' '  │    --reinstall, --update Force reinstall: re-fetch and rebuild dependencies') -ForegroundColor Gray
-    Write-Host (T '  │    --clean, --reset      清理并重置便携运行时目录（dsh-runtime）' '  │    --clean, --reset      Clean and reset portable runtime directory') -ForegroundColor Gray
-    Write-Host (T '  │    --create-shortcut     在当前用户桌面创建一键启动快捷方式并退出' '  │    --create-shortcut     Create desktop shortcut and exit') -ForegroundColor Gray
-    Write-Host (T '  │    --port <端口号>       指定 Web 服务端口（默认 3080，被占用则自动顺延）' '  │    --port <number>       Specify web port (default 3080, auto fallback)') -ForegroundColor Gray
-    Write-Host (T '  │    --lang <zh|en>        切换语言界面（默认随操作系统自动自适应）' '  │    --lang <zh|en>        Switch UI language (default: system locale)') -ForegroundColor Gray
-    Write-Host (T '  │    --no-open             启动服务后不自动调用浏览器打开网页' '  │    --no-open             Do not open browser automatically') -ForegroundColor Gray
-    Write-Host (T '  │    --no-pause            自动化脚本模式，执行完毕后不等待用户按回车' '  │    --no-pause            Non-interactive mode, do not wait for enter key') -ForegroundColor Gray
-    Write-Host (T '  │    --help, -h            显示此帮助信息' '  │    --help, -h            Show this help manual') -ForegroundColor Gray
+    Write-Host (T '  │    --install-only        仅安装与自检依赖，不启动服务' '  │    --install-only        Install and probe, do not start web') -ForegroundColor Gray
+    Write-Host (T '  │    --fast, --skip-check  极速模式：跳过版本检查秒启本地' '  │    --fast, --skip-check  Fast mode: skip check, launch local') -ForegroundColor Gray
+    Write-Host (T '  │    --reinstall, --update 强制重装：重拉核心包并自检依赖' '  │    --reinstall, --update Reinstall: refetch core & probe') -ForegroundColor Gray
+    Write-Host (T '  │    --clean, --reset      清理并重置便携目录 (dsh-runtime)' '  │    --clean, --reset      Clean portable runtime directory') -ForegroundColor Gray
+    Write-Host (T '  │    --create-shortcut     在当前桌面创建一键启动快捷方式' '  │    --create-shortcut     Create desktop shortcut and exit') -ForegroundColor Gray
+    Write-Host (T '  │    --port <端口号>       指定 Web 端口（默认 3080 自动顺延）' '  │    --port <number>       Set web port (default: 3080 auto)') -ForegroundColor Gray
+    Write-Host (T '  │    --lang <zh|en>        切换界面语言（默认系统语言自适应）' '  │    --lang <zh|en>        Switch language (default: system)') -ForegroundColor Gray
+    Write-Host (T '  │    --no-open             服务就绪后不自动唤起默认浏览器' '  │    --no-open             Do not open browser automatically') -ForegroundColor Gray
+    Write-Host (T '  │    --no-pause            自动化脚本模式，运行完毕不等待回车' '  │    --no-pause            Script mode: exit without pause') -ForegroundColor Gray
+    Write-Host (T '  │    --help, -h            显示此命令参数说明手册' '  │    --help, -h            Show this help options manual') -ForegroundColor Gray
     Write-BoxFooter
     Write-Host ''
 }
@@ -642,14 +643,14 @@ function Show-TroubleshootingCard {
     Write-Host ''
     Write-BoxHeader -Title (T '排查建议' 'Troubleshooting') -BadgeText 'TIPS' -BadgeBg DarkYellow -BadgeFg Black
     $tips = @(
-        @((T '网络超时或下载失败' 'Network timeout or download failed'),
-          (T '检查网络与代理后重试；已有本地版本可先用 --fast 离线启动' 'Check network/proxy and retry; use --fast to launch the local version offline')),
-        @((T '原生依赖自检失败' 'Native dependency probe failed'),
-          (T '运行 --reinstall 重新拉取核心组件并校验依赖' 'Run --reinstall to refetch the core package and re-probe')),
-        @((T '便携环境疑似损坏' 'Portable runtime seems broken'),
-          (T '运行 --clean 全量重置后重新部署' 'Run --clean to fully reset, then deploy again')),
-        @((T '参数用法疑问' 'Usage questions'),
-          (T '运行 --help 查看完整参数说明' 'Run --help for the full options list'))
+        @((T '网络超时' 'Network'),
+          (T '检查网络与代理；可用 --fast 离线秒启' 'Check proxy/network; run --fast offline')),
+        @((T '依赖自检' 'Modules'),
+          (T '运行 --reinstall 重新拉取并校验依赖' 'Run --reinstall to rebuild modules')),
+        @((T '环境异常' 'Runtime'),
+          (T '运行 --clean 清理重置便携运行环境' 'Run --clean to reset portable runtime')),
+        @((T '参数帮助' 'Manual '),
+          (T '运行 --help 查看完整参数使用手册' 'Run --help to inspect full options'))
     )
     foreach ($tip in $tips) {
         Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
