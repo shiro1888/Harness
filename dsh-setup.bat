@@ -375,11 +375,11 @@ function Show-QuickActionMenu {
     Write-Host (T ' 强制重装' ' Reinstall') -ForegroundColor Gray
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host ' C ' -BackgroundColor DarkMagenta -ForegroundColor White -NoNewline
-    Write-Host (T ' 清理重置    ' ' Clean/Reset    ') -ForegroundColor Gray -NoNewline
+    Write-Host (T ' 清理重置    ' ' Clean/Reset ') -ForegroundColor Gray -NoNewline
     Write-Host ' S ' -BackgroundColor DarkGreen -ForegroundColor White -NoNewline
-    Write-Host (T ' 桌面快捷    ' ' Shortcut       ') -ForegroundColor Gray -NoNewline
+    Write-Host (T ' 桌面快捷    ' ' Shortcut    ') -ForegroundColor Gray -NoNewline
     Write-Host ' H ' -BackgroundColor DarkGray -ForegroundColor White -NoNewline
-    Write-Host (T ' 帮助手册    ' ' Help Manual    ') -ForegroundColor Gray -NoNewline
+    Write-Host (T ' 帮助手册    ' ' Help Manual ') -ForegroundColor Gray -NoNewline
     Write-Host ' Q ' -BackgroundColor DarkRed -ForegroundColor White -NoNewline
     Write-Host (T ' 安全退出' ' Exit') -ForegroundColor Gray
     Write-Host '  │' -ForegroundColor DarkCyan
@@ -517,9 +517,9 @@ function Show-StatusCard {
     $archText = if ($hwSpec) { ("Win {0} ({1})" -f $Arch, $hwSpec) } else { ("Windows {0}" -f $Arch) }
     # 两列看板：第一列按显示宽度补齐到固定列位。.NET PadRight 按字符数计算，
     # 遇到全角/宽字符时会错位，因此统一用 Get-DisplayWidth 计算填充。
-    $archPad = [Math]::Max(2, 22 - (Get-DisplayWidth $archText))
+    $archPad = [Math]::Max(2, 20 - (Get-DisplayWidth $archText))
     $verText = "v{0}" -f $DshVer
-    $verPad = [Math]::Max(2, 22 - (Get-DisplayWidth $verText))
+    $verPad = [Math]::Max(2, 20 - (Get-DisplayWidth $verText))
 
     Write-BoxHeader -Title (T '运行状态看板' 'Runtime Matrix') -BadgeText 'ACTIVE' -BadgeBg DarkCyan -BadgeFg Black
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
@@ -535,7 +535,14 @@ function Show-StatusCard {
     Write-Host ('{0}{1}' -f $verText, (' ' * $verPad)) -ForegroundColor Cyan -NoNewline
     Write-Host (T '网络加速 ' 'Mirror   ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host ("{0}" -f $MirrorSource) -ForegroundColor Green
+    $displaySource = switch ($MirrorSource) {
+        '国内 npm 镜像' { T '国内 npm 镜像' 'npm Mirror (CN)' }
+        'npm 官方仓库'  { T 'npm 官方仓库' 'Official Registry' }
+        '本地极速模式'  { T '本地极速模式' 'Fast Local' }
+        '本地离线模式'  { T '本地离线模式' 'Local Offline' }
+        default { $MirrorSource }
+    }
+    Write-Host ("{0}" -f $displaySource) -ForegroundColor Green
     Write-BoxFooter
     Write-Host ''
 }
@@ -713,7 +720,7 @@ function Get-MachineArchitecture {
     switch ($value.ToUpperInvariant()) {
         'AMD64' { return 'x64' }
         'ARM64' { return 'arm64' }
-        default { throw "暂不支持此 Windows 架构：$value。需要 64 位 x64 或 ARM64。" }
+        default { throw (T "暂不支持此 Windows 架构：$value。需要 64 位 x64 或 ARM64。" "Windows architecture $value is not supported. 64-bit x64 or ARM64 required.") }
     }
 }
 
@@ -831,7 +838,7 @@ function Get-LatestDshRelease {
         }
     }
 
-    Write-Info '正在并发查询 npm 官方仓库与国内镜像最新发布信息...'
+    Write-Info (T '正在并发查询 npm 官方仓库与国内镜像最新发布信息...' 'Querying npm official registry and CN mirror concurrently...')
     $query = Invoke-ParallelRegistryQuery
     $official = $query.Official
     $mirror = $query.Mirror
@@ -842,11 +849,11 @@ function Get-LatestDshRelease {
         if ($null -ne $mirror -and $mirror.Latest -eq $official.Latest) {
             $installRegistry = $mirror.Registry
             $installSource = $mirror.Name
-            Write-Ok ("官方最新版本为 {0}（国内镜像已同步，优先选用国内镜像加速）" -f $official.Latest)
+            Write-Ok (T ("官方最新版本为 {0}（国内镜像已同步，优先选用国内镜像加速）" -f $official.Latest) ("Official latest is {0} (CN mirror synced, using mirror acceleration)" -f $official.Latest))
         } elseif ($null -ne $mirror) {
-            Write-Notice ("国内镜像当前为 {0}，官方最新版本为 {1}；将从官方仓库安装。" -f $mirror.Latest, $official.Latest)
+            Write-Notice (T ("国内镜像当前为 {0}，官方最新版本为 {1}；将从官方仓库安装。" -f $mirror.Latest, $official.Latest) ("CN mirror is {0}, official latest is {1}; installing from official registry." -f $mirror.Latest, $official.Latest))
         } else {
-            Write-Ok ("已获取官方最新版本：{0}" -f $official.Latest)
+            Write-Ok (T ("已获取官方最新版本：{0}" -f $official.Latest) ("Fetched official latest version: {0}" -f $official.Latest))
         }
 
         return [pscustomobject]@{
@@ -859,7 +866,7 @@ function Get-LatestDshRelease {
     }
 
     if ($null -ne $mirror) {
-        Write-Notice 'npm 官方仓库当前连接较慢或不可用，先以国内镜像 latest 为准。'
+        Write-Notice (T 'npm 官方仓库当前连接较慢或不可用，先以国内镜像 latest 为准。' 'npm official registry slow/unreachable, using CN mirror latest.')
         return [pscustomobject]@{
             Latest = $mirror.Latest
             Registry = $mirror.Registry
@@ -871,7 +878,7 @@ function Get-LatestDshRelease {
 
     # 两者均连接失败（断网或受限机房）：若已有本地版本，优雅降级为离线启动
     if (-not [string]::IsNullOrWhiteSpace($InstalledVersion) -and (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-        Write-Notice ("当前网络无法连接仓库，自动启用离线模式，继续使用已安装的本地版本 {0}。" -f $InstalledVersion)
+        Write-Notice (T ("当前网络无法连接仓库，自动启用离线模式，继续使用已安装的本地版本 {0}。" -f $InstalledVersion) ("Cannot reach registries, enabling offline mode with local version {0}." -f $InstalledVersion))
         return [pscustomobject]@{
             Latest = $InstalledVersion
             Registry = $null
@@ -893,7 +900,7 @@ function Get-InstalledDshVersion {
         $manifest = Get-Content -LiteralPath $DshManifest -Raw -Encoding UTF8 | ConvertFrom-Json
         return [string]$manifest.version
     } catch {
-        Write-Notice '现有 dsh 包信息无法读取，将执行修复安装。'
+        Write-Notice (T '现有 dsh 包信息无法读取，将执行修复安装。' 'Existing dsh package manifest unreadable, repairing.')
         return $null
     }
 }
@@ -930,11 +937,11 @@ function Get-LatestNodeRelease {
                 }
             }
         } catch {
-            Write-Notice ("无法读取{0}版本列表：{1}" -f $source.Name, $_.Exception.Message)
+            Write-Notice (T ("无法读取{0}版本列表：{1}" -f $source.Name, $_.Exception.Message) ("Failed to read {0} versions: {1}" -f $source.Name, $_.Exception.Message))
         }
     }
 
-    Write-Notice ("暂时无法查询 Node.js 最新 LTS，改用安装器内置的已验证版本 {0}。" -f $FallbackNodeVersion)
+    Write-Notice (T ("暂时无法查询 Node.js 最新 LTS，改用安装器内置的已验证版本 {0}。" -f $FallbackNodeVersion) ("Cannot query latest Node.js LTS, fallback to built-in verified version {0}." -f $FallbackNodeVersion))
     return [pscustomobject]@{
         Version = $FallbackNodeVersion
         Name = '安装器内置版本'
@@ -1001,7 +1008,7 @@ function Invoke-SingleDownload {
         if ($curlExitCode -eq 0) {
             return
         }
-        Write-Notice ("curl 下载失败（退出码 {0}），改用系统下载组件重试。" -f $curlExitCode)
+        Write-Notice (T ("curl 下载失败（退出码 {0}），改用系统下载组件重试。" -f $curlExitCode) ("curl download failed (exit code {0}), retrying with system web client." -f $curlExitCode))
     }
 
     Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
@@ -1037,24 +1044,24 @@ function Invoke-FileDownload {
             Remove-Item -LiteralPath $Destination -Force
         }
 
-        Write-Info ("正在下载：{0}" -f $uri)
+        Write-Info (T ("正在下载：{0}" -f $uri) ("Downloading: {0}" -f $uri))
         try {
             Invoke-SingleDownload -Uri $uri -Destination $Destination
 
             $file = Get-Item -LiteralPath $Destination
             if ($file.Length -le 0) {
-                throw '下载结果为空文件'
+                throw (T '下载结果为空文件' 'Downloaded file is empty.')
             }
             if (-not (Test-ZipArchiveHeader -Path $Destination)) {
-                throw '下载结果不是有效的 Node.js 压缩包'
+                throw (T '下载结果不是有效的 Node.js 压缩包' 'Downloaded file is not a valid Node.js zip archive.')
             }
             return
         } catch {
-            Write-Notice ("当前下载地址失败：{0}" -f $_.Exception.Message)
+            Write-Notice (T ("当前下载地址失败：{0}" -f $_.Exception.Message) ("Current download URL failed: {0}" -f $_.Exception.Message))
         }
     }
 
-    throw '所有 Node.js 下载地址均不可用，请检查网络连接后重试。'
+    throw (T '所有 Node.js 下载地址均不可用，请检查网络连接后重试。' 'All Node.js download URLs failed. Please check network and retry.')
 }
 
 function Install-PortableNode {
@@ -1074,12 +1081,12 @@ function Install-PortableNode {
         "https://nodejs.org/dist/$version/$archiveName"
     )
 
-    Write-PipelineStep ("[1/3] 下载并准备便携 Node.js {0}（{1}）" -f $version, $Architecture)
+    Write-PipelineStep (T ("[1/3] 下载并准备便携 Node.js {0}（{1}）" -f $version, $Architecture) ("[1/3] Download & prepare portable Node.js {0} ({1})" -f $version, $Architecture))
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 
     try {
         Invoke-FileDownload -Uris $downloadUris -Destination $archivePath
-        Write-Info '正在解压 Node.js 压缩包...'
+        Write-Info (T '正在解压 Node.js 压缩包...' 'Extracting Node.js zip archive...')
         if (Test-Path -LiteralPath $stagingRoot) {
             Remove-Item -LiteralPath $stagingRoot -Recurse -Force
         }
@@ -1089,12 +1096,12 @@ function Install-PortableNode {
         $stagedNode = Join-Path $expandedNode 'node.exe'
         $stagedNpm = Join-Path $expandedNode 'npm.cmd'
         if (-not (Test-Path -LiteralPath $stagedNode -PathType Leaf) -or -not (Test-Path -LiteralPath $stagedNpm -PathType Leaf)) {
-            throw 'Node.js 压缩包解压后缺少 node.exe 或 npm.cmd'
+            throw (T 'Node.js 压缩包解压后缺少 node.exe 或 npm.cmd' 'Node.js archive extraction missing node.exe or npm.cmd.')
         }
 
         $reportedVersion = (& $stagedNode --version 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne $version) {
-            throw "Node.js 自检失败，期望 $version，实际输出 $reportedVersion"
+            throw (T ("Node.js 自检失败，期望 {0}，实际输出 {1}" -f $version, $reportedVersion) ("Node.js probe failed, expected {0}, got {1}" -f $version, $reportedVersion))
         }
 
         if (Test-Path -LiteralPath $backupRoot) {
@@ -1116,7 +1123,7 @@ function Install-PortableNode {
         if (Test-Path -LiteralPath $backupRoot) {
             Remove-Item -LiteralPath $backupRoot -Recurse -Force
         }
-        Write-Ok ("便携 Node.js {0} 安装完成（来源: {1}）" -f $version, $release.Name)
+        Write-Ok (T ("便携 Node.js {0} 安装完成（来源: {1}）" -f $version, $release.Name) ("Portable Node.js {0} installed (source: {1})" -f $version, $release.Name))
     } finally {
         if (Test-Path -LiteralPath $archivePath) {
             Remove-Item -LiteralPath $archivePath -Force
@@ -1176,7 +1183,7 @@ function Ensure-PortableNode {
     Install-PortableNode -Architecture $architecture
     $swNode.Stop()
     $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
-    Write-TimedLine -Prefix "  ● [1/3] " -Title (T ("便携 Node.js 安装部署完成 ({0} {1})" -f $version, $architecture) ("Portable Node.js installation complete ({0} {1})" -f $version, $architecture)) -ElapsedMs $swNode.ElapsedMilliseconds
+    Write-TimedLine -Prefix "  ● [1/3] " -Title (T ("便携 Node.js 安装部署完成 ({0} {1})" -f $version, $architecture) ("Portable Node.js installed ({0} {1})" -f $version, $architecture)) -ElapsedMs $swNode.ElapsedMilliseconds
     return [pscustomobject]@{ Version = $version; Architecture = $architecture }
 }
 
@@ -1287,7 +1294,7 @@ function Find-DshDependencyDirectory {
         }
     }
 
-    throw "没有找到 dsh 运行依赖：$Name"
+    throw (T "没有找到 dsh 运行依赖：$Name" "Cannot find dsh runtime dependency: $Name")
 }
 
 function Test-DshRuntimeDependencies {
@@ -1355,30 +1362,30 @@ function Ensure-LatestDsh {
         }
         $swInstall.Stop()
         if ($exitCode -ne 0) {
-            throw "npm 安装 dsh 失败，退出码：$exitCode"
+            throw (T ("npm 安装 dsh 失败，退出码：{0}" -f $exitCode) ("npm install dsh failed with exit code: {0}" -f $exitCode))
         }
         Write-TimedLine -Prefix "    ├─ " -Title (T ("拉取并安装核心组件 (v{0})" -f $release.Latest) ("Fetch and install core package (v{0})" -f $release.Latest)) -ElapsedMs $swInstall.ElapsedMilliseconds
     }
 
     $verifiedVersion = Get-InstalledDshVersion
     if ($verifiedVersion -ne $expectedVersion) {
-        throw "安装后版本校验失败，期望 $expectedVersion，实际 $verifiedVersion"
+        throw (T ("安装后版本校验失败，期望 {0}，实际 {1}" -f $expectedVersion, $verifiedVersion) ("Post-install version mismatch, expected {0}, got {1}" -f $expectedVersion, $verifiedVersion))
     }
     if (-not (Test-Path -LiteralPath $DshCmd -PathType Leaf)) {
-        throw "未找到启动文件：$DshCmd"
+        throw (T ("未找到启动文件：{0}" -f $DshCmd) ("Executable not found: {0}" -f $DshCmd))
     }
 
     $cliOutput = (& $DshCmd --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "dsh --version 运行失败：$cliOutput"
+        throw (T ("dsh --version 运行失败：{0}" -f $cliOutput) ("dsh --version execution failed: {0}" -f $cliOutput))
     }
     $cliLines = @($cliOutput -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($cliLines.Count -eq 0) {
-        throw 'dsh --version 没有返回版本号'
+        throw (T 'dsh --version 没有返回版本号' 'dsh --version returned no version string.')
     }
     $cliVersion = $cliLines[-1].Trim()
     if ($cliVersion -ne $verifiedVersion) {
-        throw "dsh 命令版本校验失败，包版本 $verifiedVersion，命令输出 $cliVersion"
+        throw (T ("dsh 命令版本校验失败，包版本 {0}，命令输出 {1}" -f $verifiedVersion, $cliVersion) ("dsh version check failed: package {0}, CLI output {1}" -f $verifiedVersion, $cliVersion))
     }
 
     # 深度自检原生依赖
@@ -1388,7 +1395,7 @@ function Ensure-LatestDsh {
         Write-Notice (T ("运行依赖自检未通过，正在尝试自动修复：{0}" -f $runtimeProbe.Message) ("Runtime probe failed, attempting automatic repair: {0}" -f $runtimeProbe.Message))
         $rebuildExit = Invoke-DshRebuild
         if ($rebuildExit -ne 0) {
-            throw "dsh 依赖修复失败，npm 退出码：$rebuildExit"
+            throw (T ("dsh 依赖修复失败，npm 退出码：{0}" -f $rebuildExit) ("dsh dependency repair failed, npm exit code: {0}" -f $rebuildExit))
         }
         $runtimeProbe = Test-DshRuntimeDependencies
         if (-not $runtimeProbe.Ok) {
@@ -1540,7 +1547,7 @@ function Main {
 
     $npmVersion = (& $NpmCmd --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "npm 无法运行：$npmVersion"
+        throw (T ("npm 无法运行：{0}" -f $npmVersion) ("npm failed to run: {0}" -f $npmVersion))
     }
 
     Write-Host '  │  │' -ForegroundColor DarkCyan
@@ -1584,7 +1591,7 @@ function Main {
     # 正常退出码包括：0、130 (SIGINT/Ctrl+C)、-1073741510 (0xC000013A STATUS_CONTROL_C_EXIT) 等
     $isGracefulExit = ($webExitCode -eq 0 -or $webExitCode -eq 130 -or $webExitCode -eq -1073741510 -or $webExitCode -eq 3221225786)
     if (-not $isGracefulExit) {
-        throw "DeepSeek Harness 服务异常停止，退出码：$webExitCode"
+        throw (T ("DeepSeek Harness 服务异常停止，退出码：{0}" -f $webExitCode) ("DeepSeek Harness service stopped unexpectedly with exit code: {0}" -f $webExitCode))
     }
 
     Write-Notice (T ("DeepSeek Harness 服务已安全停止（端口 {0} · 本次会话 {1}）" -f $port, (Format-SessionDuration $Global:SessionStopwatch.ElapsedMilliseconds)) ("DeepSeek Harness service stopped safely (port {0}, session {1})" -f $port, (Format-SessionDuration $Global:SessionStopwatch.ElapsedMilliseconds)))
