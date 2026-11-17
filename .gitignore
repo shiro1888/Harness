@@ -1,5 +1,7 @@
 # DeepSeek Harness 便携运行时与安装缓存
 dsh-runtime/
+# WorkBuddy 工作区本地数据（不提交）
+.workbuddy/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

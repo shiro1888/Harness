@@ -10,6 +10,7 @@ set "DSH_SETUP_REINSTALL="
 set "DSH_SETUP_CLEAN="
 set "DSH_SETUP_SHORTCUT="
 set "DSH_SETUP_HELP="
+set "DSH_SETUP_LAN="
 set "DSH_SETUP_PORT="
 set "DSH_SETUP_LANG="
 set "DSH_SETUP_BAD_ARG="
@@ -25,6 +26,7 @@ if "%~1"=="" goto run_installer
 if /I "%~1"=="--install-only"    set "DSH_SETUP_INSTALL_ONLY=1" & shift & goto parse_arguments
 if /I "%~1"=="--no-pause"        set "DSH_SETUP_NONINTERACTIVE=1" & shift & goto parse_arguments
 if /I "%~1"=="--no-open"         set "DSH_SETUP_NO_OPEN=1" & shift & goto parse_arguments
+if /I "%~1"=="--lan"             set "DSH_SETUP_LAN=1" & shift & goto parse_arguments
 if /I "%~1"=="--fast"            set "DSH_SETUP_FAST=1" & shift & goto parse_arguments
 if /I "%~1"=="--skip-check"      set "DSH_SETUP_FAST=1" & shift & goto parse_arguments
 if /I "%~1"=="--reinstall"       set "DSH_SETUP_REINSTALL=1" & shift & goto parse_arguments
@@ -157,6 +159,14 @@ $NpmConfig = Join-Path $RuntimeRoot 'installer.npmrc'
 $NpmCache = Join-Path $RuntimeRoot 'npm-cache'
 $FallbackNodeVersion = 'v24.21.0'
 $AllowedInstallScripts = '@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
+$MinimumNodeVersion = [version]'24.9.0'
+$MinimumNpmVersion = [version]'11.16.0'
+# 已知版本的兜底哈希：当 npmmirror 与 nodejs.org 的 SHASUMS256.txt 都暂时不可达时，
+# 仍能对安装器内置的 fallback 版本做完整性校验。新增 fallback 版本时同步补一行。
+$KnownNodeArchiveHashes = @{
+    'node-v24.21.0-win-x64.zip'   = '158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541'
+    'node-v24.21.0-win-arm64.zip' = '8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921'
+}
 
 
 
@@ -433,19 +443,22 @@ function Show-QuickActionMenu {
 }
 
 function Start-WebHeartbeatPing {
-    param([int]$Port)
+    param(
+        [int]$Port,
+        [string]$HostAddress = '127.0.0.1'
+    )
     try {
         $rs = [RunspaceFactory]::CreateRunspace()
         $rs.Open()
         $ps = [PowerShell]::Create()
         $ps.Runspace = $rs
         $null = $ps.AddScript({
-            param($p, $isEn)
+            param($p, $h, $isEn)
             $sw = [Diagnostics.Stopwatch]::StartNew()
             while ($sw.Elapsed.TotalSeconds -lt 15) {
                 Start-Sleep -Milliseconds 600
                 try {
-                    $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$p/")
+                    $req = [System.Net.HttpWebRequest]::Create(("http://{0}:{1}/" -f $h, $p))
                     $req.Timeout = 1000
                     $resp = $req.GetResponse()
                     if ($null -ne $resp) {
@@ -453,16 +466,16 @@ function Start-WebHeartbeatPing {
                         Write-Host ''
                         Write-Host '  ● ' -ForegroundColor Green -NoNewline
                         $msg = if ($isEn) {
-                            ("Web heartbeat alive: local HTTP responded in {0:N1}s." -f $sw.Elapsed.TotalSeconds)
+                            ("Web heartbeat alive: HTTP responded in {0:N1}s." -f $sw.Elapsed.TotalSeconds)
                         } else {
-                            ("Web 活跃心跳探测正常：本地 HTTP 服务已于 {0:N1}s 成功握手响应。" -f $sw.Elapsed.TotalSeconds)
+                            ("Web 活跃心跳探测正常：HTTP 服务已于 {0:N1}s 成功握手响应。" -f $sw.Elapsed.TotalSeconds)
                         }
                         Write-Host $msg -ForegroundColor White
                         break
                     }
                 } catch {}
             }
-        }).AddArgument($Port).AddArgument($Global:IsEnglish)
+        }).AddArgument($Port).AddArgument($HostAddress).AddArgument($Global:IsEnglish)
         $null = $ps.BeginInvoke()
     } catch {}
 }
@@ -571,50 +584,55 @@ function Show-Banner {
     Write-Host '● ' -ForegroundColor Cyan -NoNewline
     Write-Host (T '原生依赖自检 (Koffi/PTY)   ' 'Native Probes (Koffi & PTY)   ') -ForegroundColor Gray -NoNewline
     Write-Host '● ' -ForegroundColor Cyan -NoNewline
-    Write-Host (T '双端访问就绪 (电脑/手机)' 'Dual-Network (LAN Ready)') -ForegroundColor Gray
+    Write-Host (T '本机访问就绪 (手机需 --lan)' 'Local Access (LAN opt-in)') -ForegroundColor Gray
     Write-BoxFooter
     Write-Host ''
 }
 
 function Show-Dashboard {
     param(
-        [string]$Version,
-        [int]$Port
+        [int]$Port,
+        [string]$HostAddress = '127.0.0.1',
+        [bool]$LanMode = $false,
+        [bool]$NoOpen = $false
     )
-    $lanIp = Get-LocalLanIp
+    $url = "http://{0}:{1}" -f $HostAddress, $Port
 
     Write-Host ''
     Write-BoxHeader -Title (T '网页服务就绪' 'Service Ready') -BadgeText 'ONLINE' -BadgeBg Green -BadgeFg Black
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
     Write-Host '▌ ' -ForegroundColor Cyan -NoNewline
-    Write-Host (T '本机电脑访问 (Local PC)' 'Local PC Access') -ForegroundColor White
+    if ($LanMode) {
+        Write-Host (T '局域网访问 (LAN)' 'LAN Access') -ForegroundColor White
+    } else {
+        Write-Host (T '本机电脑访问 (Local PC)' 'Local PC Access') -ForegroundColor White
+    }
     Write-Host '  │    ' -ForegroundColor DarkCyan -NoNewline
-    Write-Host ("http://127.0.0.1:{0}" -f $Port) -ForegroundColor Cyan
-    if ($lanIp) {
-        Write-Host '  │' -ForegroundColor DarkCyan
-        Write-Host '  │  ' -ForegroundColor DarkCyan -NoNewline
-        Write-Host '▌ ' -ForegroundColor Green -NoNewline
-        Write-Host (T '手机/平板/局域网访问 (Mobile & LAN)' 'Mobile & LAN Access') -ForegroundColor White
+    Write-Host $url -ForegroundColor Cyan
+    if ($LanMode) {
         Write-Host '  │    ' -ForegroundColor DarkCyan -NoNewline
-        Write-Host ("http://{0}:{1}" -f $lanIp, $Port) -ForegroundColor Green -NoNewline
-        Write-Host (T '  (同一 Wi-Fi 局域网可用)' '  (Same Wi-Fi network)') -ForegroundColor DarkGray
+        Write-Host (T '仅同一局域网可访问；本机也请使用此地址' 'Same LAN only; use this address on this PC too') -ForegroundColor DarkGray
     }
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-BoxDivider -Title (T '快捷使用指引' 'Quick Guide')
     Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '自动唤醒 ' 'Browser ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-    Write-Host (T '浏览器已尝试唤起，亦可点击上方链接访问' 'Default browser opened; or click above URL') -ForegroundColor DarkGray
+    if ($NoOpen) {
+        Write-Host (T '已按 --no-open 跳过自动打开，请手动访问上方地址' 'Skipped by --no-open; open the URL above manually') -ForegroundColor DarkGray
+    } else {
+        Write-Host (T '浏览器已尝试唤起，亦可点击上方链接访问' 'Default browser opened; or click above URL') -ForegroundColor DarkGray
+    }
     Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '令牌认证 ' 'Token   ') -ForegroundColor Gray -NoNewline
     Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
     Write-Host (T '首次若需登录，复制下方日志中 ?token= 完整链接' 'If login required, copy full ?token= URL below') -ForegroundColor DarkGray
-    if ($lanIp) {
+    if ($LanMode) {
         Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
-        Write-Host (T '手机访问 ' 'Mobile  ') -ForegroundColor Gray -NoNewline
+        Write-Host (T '安全提示 ' 'Security ') -ForegroundColor Gray -NoNewline
         Write-Host '❯ ' -ForegroundColor Cyan -NoNewline
-        Write-Host (T '手机连接同 Wi-Fi 即可访问；超时请放行防火墙' 'Connect same Wi-Fi; check firewall if timeout') -ForegroundColor DarkGray
+        Write-Host (T '会向同网段暴露具备 shell/文件能力的 Agent，仅在可信网络使用' 'Exposes a shell/file-capable agent to the LAN; trusted networks only') -ForegroundColor Yellow
     }
     Write-Host '  │  • ' -ForegroundColor DarkCyan -NoNewline
     Write-Host (T '服务保持 ' 'Control ') -ForegroundColor Gray -NoNewline
@@ -640,6 +658,7 @@ function Show-Help {
     Write-Host (T '  │    --port <端口号>       指定 Web 端口（默认 3080 自动顺延）' '  │    --port <number>       Set web port (default: 3080 auto)') -ForegroundColor Gray
     Write-Host (T '  │    --lang <zh|en>        切换界面语言（默认系统语言自适应）' '  │    --lang <zh|en>        Switch language (default: system)') -ForegroundColor Gray
     Write-Host (T '  │    --no-open             服务就绪后不自动唤起默认浏览器' '  │    --no-open             Do not open browser automatically') -ForegroundColor Gray
+    Write-Host (T '  │    --lan                 绑定局域网 IPv4（同 Wi-Fi 访问，会暴露服务）' '  │    --lan                 Bind LAN IPv4 (same Wi-Fi; exposes service)') -ForegroundColor Gray
     Write-Host (T '  │    --no-pause            自动化脚本模式，运行完毕不等待回车' '  │    --no-pause            Script mode: exit without pause') -ForegroundColor Gray
     Write-Host (T '  │    --help, -h            显示此命令参数说明手册' '  │    --help, -h            Show this help options manual') -ForegroundColor Gray
     Write-BoxFooter
@@ -925,7 +944,7 @@ function Get-LatestNodeRelease {
             $releases = Invoke-RestMethod -Uri $source.Index -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' }
             $release = $null
             foreach ($candidate in $releases) {
-                if ($candidate.lts -and ($candidate.files -contains $requiredFile)) {
+                if ($candidate.lts -and ($candidate.files -contains $requiredFile) -and (Test-MinimumVersion ([string]$candidate.version) $MinimumNodeVersion)) {
                     $release = $candidate
                     break
                 }
@@ -946,6 +965,61 @@ function Get-LatestNodeRelease {
         Version = $FallbackNodeVersion
         Name = '安装器内置版本'
     }
+}
+
+function Test-MinimumVersion {
+    param(
+        [string]$Actual,
+        [version]$Minimum
+    )
+    if ([string]::IsNullOrWhiteSpace($Actual)) { return $false }
+    $clean = ($Actual.Trim() -replace '^[vV]', '')
+    $parsed = $null
+    if (-not [version]::TryParse($clean, [ref]$parsed)) { return $false }
+    return ($parsed -ge $Minimum)
+}
+
+function Get-NodeArchiveHash {
+    param(
+        [string]$Version,
+        [string]$ArchiveName
+    )
+
+    $known = $KnownNodeArchiveHashes[$ArchiveName]
+    if ($known) {
+        # 内置哈希是安装器自带的信任锚，直接用它对下载文件做校验，不再额外等待网络。
+        return [pscustomobject]@{ Hash = $known.ToLowerInvariant(); Verified = $true }
+    }
+
+    $sources = @(
+        "https://npmmirror.com/mirrors/node/$Version/SHASUMS256.txt",
+        "https://nodejs.org/dist/$Version/SHASUMS256.txt"
+    )
+    $found = @()
+    foreach ($source in $sources) {
+        try {
+            $text = [string](Invoke-RestMethod -Uri $source -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' })
+            $pattern = '^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($ArchiveName) + '\s*$'
+            foreach ($line in ($text -split '\r?\n')) {
+                if ($line -match $pattern) {
+                    $found += $Matches[1].ToLowerInvariant()
+                    break
+                }
+            }
+        } catch {
+            Write-Notice (T ("无法读取校验文件 {0}：{1}" -f $source, $_.Exception.Message) ("Cannot read checksum file {0}: {1}" -f $source, $_.Exception.Message))
+        }
+    }
+
+    $unique = @($found | Select-Object -Unique)
+    if ($unique.Count -gt 1) {
+        throw (T ("不同来源的 SHA-256 不一致，已停止安装：{0}" -f ($unique -join ', ')) ("SHA-256 differs across sources, aborting: {0}" -f ($unique -join ', ')))
+    }
+    if ($unique.Count -eq 1) {
+        return [pscustomobject]@{ Hash = $unique[0]; Verified = $true }
+    }
+    Write-Notice (T ("暂时无法获取 {0} 的官方 SHA-256，本次仅校验 ZIP 结构。" -f $ArchiveName) ("Cannot fetch official SHA-256 for {0}; only ZIP structure will be checked." -f $ArchiveName))
+    return [pscustomobject]@{ Hash = $null; Verified = $false }
 }
 
 function Get-CurlExecutable {
@@ -1036,9 +1110,11 @@ function Test-ZipArchiveHeader {
 function Invoke-FileDownload {
     param(
         [string[]]$Uris,
-        [string]$Destination
+        [string]$Destination,
+        [string]$ExpectedSha256 = ''
     )
 
+    $lastError = $null
     foreach ($uri in ($Uris | Select-Object -Unique)) {
         if (Test-Path -LiteralPath $Destination) {
             Remove-Item -LiteralPath $Destination -Force
@@ -1055,13 +1131,23 @@ function Invoke-FileDownload {
             if (-not (Test-ZipArchiveHeader -Path $Destination)) {
                 throw (T '下载结果不是有效的 Node.js 压缩包' 'Downloaded file is not a valid Node.js zip archive.')
             }
+            if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+                $actualHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
+                $wantedHash = $ExpectedSha256.ToLowerInvariant()
+                if ($actualHash -ne $wantedHash) {
+                    throw (T ("SHA-256 校验失败：期望 {0}，实际 {1}" -f $wantedHash, $actualHash) ("SHA-256 mismatch: expected {0}, got {1}" -f $wantedHash, $actualHash))
+                }
+                Write-Ok (T 'Node.js 压缩包 SHA-256 校验通过' 'Node.js archive SHA-256 verified')
+            }
             return
         } catch {
+            $lastError = $_.Exception.Message
             Write-Notice (T ("当前下载地址失败：{0}" -f $_.Exception.Message) ("Current download URL failed: {0}" -f $_.Exception.Message))
         }
     }
 
-    throw (T '所有 Node.js 下载地址均不可用，请检查网络连接后重试。' 'All Node.js download URLs failed. Please check network and retry.')
+    $detail = if ([string]::IsNullOrWhiteSpace($lastError)) { '' } else { T ("最近错误：{0}" -f $lastError) ("Last error: {0}" -f $lastError) }
+    throw (T ("所有 Node.js 下载地址均不可用，请检查网络连接后重试。{0}" -f $detail) ("All Node.js download URLs failed. Please check network and retry. {0}" -f $detail))
 }
 
 function Install-PortableNode {
@@ -1084,8 +1170,9 @@ function Install-PortableNode {
     Write-PipelineStep (T ("[1/3] 下载并准备便携 Node.js {0}（{1}）" -f $version, $Architecture) ("[1/3] Download & prepare portable Node.js {0} ({1})" -f $version, $Architecture))
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 
+    $archiveHash = Get-NodeArchiveHash -Version $version -ArchiveName $archiveName
     try {
-        Invoke-FileDownload -Uris $downloadUris -Destination $archivePath
+        Invoke-FileDownload -Uris $downloadUris -Destination $archivePath -ExpectedSha256 $archiveHash.Hash
         Write-Info (T '正在解压 Node.js 压缩包...' 'Extracting Node.js zip archive...')
         if (Test-Path -LiteralPath $stagingRoot) {
             Remove-Item -LiteralPath $stagingRoot -Recurse -Force
@@ -1170,11 +1257,12 @@ function Ensure-PortableNode {
         try {
             $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
             $npmVer = (& $NpmCmd --version 2>&1 | Out-String).Trim()
-            if ($LASTEXITCODE -eq 0 -and $version -match '^v\d+\.\d+\.\d+$' -and -not [string]::IsNullOrWhiteSpace($npmVer)) {
+            if (($version -match '^v\d+\.\d+\.\d+$') -and (Test-MinimumVersion $version $MinimumNodeVersion) -and (Test-MinimumVersion $npmVer $MinimumNpmVersion)) {
                 $swNode.Stop()
                 Write-TimedLine -Prefix "  ● [1/3] " -Title (T ("便携 Node.js 运行时就绪 ({0} {1})" -f $version, $architecture) ("Portable Node.js runtime ready ({0} {1})" -f $version, $architecture)) -ElapsedMs $swNode.ElapsedMilliseconds
                 return [pscustomobject]@{ Version = $version; Architecture = $architecture }
             }
+            Write-Notice (T ("现有便携运行时低于 dsh 要求（Node >= {0}，npm >= {1}），正在自动重建。" -f $MinimumNodeVersion, $MinimumNpmVersion) ("Existing portable runtime is below dsh requirements (Node >= {0}, npm >= {1}); rebuilding automatically." -f $MinimumNodeVersion, $MinimumNpmVersion))
         } catch {
             Write-Notice (T '现有便携 Node.js 无法运行，正在自动重新准备。' 'Existing portable Node.js failed to run, re-preparing automatically.')
         }
@@ -1183,6 +1271,13 @@ function Ensure-PortableNode {
     Install-PortableNode -Architecture $architecture
     $swNode.Stop()
     $version = (& $NodeExe --version 2>&1 | Out-String).Trim()
+    $npmVer = (& $NpmCmd --version 2>&1 | Out-String).Trim()
+    if (-not (Test-MinimumVersion $version $MinimumNodeVersion)) {
+        throw (T ("便携 Node.js 版本仍低于 dsh 要求（需要 >= {0}，实际 {1}）。" -f $MinimumNodeVersion, $version) ("Portable Node.js is still below dsh requirements (need >= {0}, got {1})." -f $MinimumNodeVersion, $version))
+    }
+    if (-not (Test-MinimumVersion $npmVer $MinimumNpmVersion)) {
+        throw (T ("便携 npm 版本仍低于依赖白名单要求（需要 >= {0}，实际 {1}）。" -f $MinimumNpmVersion, $npmVer) ("Portable npm is still below the allow-scripts requirement (need >= {0}, got {1})." -f $MinimumNpmVersion, $npmVer))
+    }
     Write-TimedLine -Prefix "  ● [1/3] " -Title (T ("便携 Node.js 安装部署完成 ({0} {1})" -f $version, $architecture) ("Portable Node.js installed ({0} {1})" -f $version, $architecture)) -ElapsedMs $swNode.ElapsedMilliseconds
     return [pscustomobject]@{ Version = $version; Architecture = $architecture }
 }
@@ -1302,17 +1397,17 @@ function Test-DshRuntimeDependencies {
         $koffiRoot = Find-DshDependencyDirectory -Name 'koffi'
         $koffiProbe = Invoke-NodeProbe -JavaScript "require(process.argv[1]); process.stdout.write('ok')" -Argument $koffiRoot
         if ($koffiProbe.ExitCode -ne 0) {
-            return [pscustomobject]@{ Ok = $false; Message = "Koffi 加载失败：$($koffiProbe.Output)" }
+            return [pscustomobject]@{ Ok = $false; Message = (T ("Koffi 加载失败：{0}" -f $koffiProbe.Output) ("Koffi failed to load: {0}" -f $koffiProbe.Output)) }
         }
 
         $ptyRoot = Find-DshDependencyDirectory -Name 'node-pty'
         $ptyScript = "const p=require(process.argv[1]);const c=p.spawn(process.env.ComSpec||'cmd.exe',['/d','/c','echo DSH_PTY_PROBE'],{name:'xterm',cols:80,rows:24,cwd:process.cwd(),env:process.env});let out='';const t=setTimeout(()=>process.exit(21),5000);c.onData(d=>out+=d);c.onExit(e=>{clearTimeout(t);process.exit(e.exitCode===0&&out.includes('DSH_PTY_PROBE')?0:22)});"
         $ptyProbe = Invoke-NodeProbe -JavaScript $ptyScript -Argument $ptyRoot
         if ($ptyProbe.ExitCode -ne 0) {
-            return [pscustomobject]@{ Ok = $false; Message = "伪终端自检失败，退出码 $($ptyProbe.ExitCode)：$($ptyProbe.Output)" }
+            return [pscustomobject]@{ Ok = $false; Message = (T ("伪终端自检失败，退出码 {0}：{1}" -f $ptyProbe.ExitCode, $ptyProbe.Output) ("PTY probe failed with exit code {0}: {1}" -f $ptyProbe.ExitCode, $ptyProbe.Output)) }
         }
 
-        return [pscustomobject]@{ Ok = $true; Message = 'Koffi 原生模块与 Windows 伪终端均运行正常' }
+        return [pscustomobject]@{ Ok = $true; Message = (T 'Koffi 原生模块与 Windows 伪终端均运行正常' 'Koffi native module and Windows PTY both work') }
     } catch {
         return [pscustomobject]@{ Ok = $false; Message = $_.Exception.Message }
     }
@@ -1410,16 +1505,19 @@ function Ensure-LatestDsh {
 
     return [pscustomobject]@{
         Version = $verifiedVersion
-        Source  = if ($release.Skipped) { (T '离线模式' 'Offline mode') } else { $release.Source }
+        Source  = $release.Source
     }
 }
 
 function Test-LocalPortAvailable {
-    param([int]$Port)
+    param(
+        [int]$Port,
+        [string]$Address = '127.0.0.1'
+    )
 
     $listener = $null
     try {
-        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse($Address), $Port)
         $listener.Start()
         return $true
     } catch {
@@ -1431,20 +1529,33 @@ function Test-LocalPortAvailable {
     }
 }
 
+function Get-WebHost {
+    if ($env:DSH_SETUP_LAN -eq '1') {
+        $lanIp = Get-LocalLanIp
+        if ([string]::IsNullOrWhiteSpace($lanIp)) {
+            throw (T '已指定 --lan，但未检测到可用的局域网 IPv4 地址。请确认已连接 Wi-Fi 或网线后重试。' '--lan was requested, but no usable LAN IPv4 address was detected. Connect Wi-Fi/Ethernet and retry.')
+        }
+        return [pscustomobject]@{ Host = $lanIp; IsLan = $true }
+    }
+    return [pscustomobject]@{ Host = '127.0.0.1'; IsLan = $false }
+}
+
 function Get-WebPort {
+    param([string]$HostAddress = '127.0.0.1')
+
     if (-not [string]::IsNullOrWhiteSpace($env:DSH_SETUP_PORT)) {
         $requested = 0
         if (-not [int]::TryParse($env:DSH_SETUP_PORT, [ref]$requested) -or $requested -lt 1 -or $requested -gt 65535) {
             throw (T "指定的端口数值无效：$($env:DSH_SETUP_PORT)" "Invalid port option: $($env:DSH_SETUP_PORT)")
         }
-        if (-not (Test-LocalPortAvailable -Port $requested)) {
+        if (-not (Test-LocalPortAvailable -Port $requested -Address $HostAddress)) {
             throw (T "指定端口 $requested 已被占用，请更换端口后重试。" "Specified port $requested is already in use. Please choose another port.")
         }
         return $requested
     }
 
     foreach ($candidate in 3080..3099) {
-        if (Test-LocalPortAvailable -Port $candidate) {
+        if (Test-LocalPortAvailable -Port $candidate -Address $HostAddress) {
             if ($candidate -ne 3080) {
                 Write-Notice (T ("默认端口 3080 已被占用，自动选择空闲端口 {0}。" -f $candidate) ("Default port 3080 is in use, switched to free port {0}." -f $candidate))
             }
@@ -1452,7 +1563,7 @@ function Get-WebPort {
         }
     }
 
-    throw (T '本地端口 3080 到 3099 均被占用，请关闭占用程序后重试。' 'Local ports 3080 to 3099 are all in use. Please close conflicting programs and retry.')
+    throw (T '端口 3080 到 3099 均被占用，请关闭占用程序后重试。' 'Ports 3080 to 3099 are all in use. Please close conflicting programs and retry.')
 }
 
 function Main {
@@ -1523,10 +1634,12 @@ function Main {
     # 快捷方式创建指令
     if ($env:DSH_SETUP_SHORTCUT -eq '1') {
         Write-Step (T '创建桌面快捷方式' 'Create Desktop Shortcut')
-        $shortcutArgs = if ($env:DSH_SETUP_FAST -eq '1') { '--fast' } else { '' }
-        $lnk = New-DesktopShortcut -Arguments $shortcutArgs
+        $shortcutArgs = @()
+        if ($env:DSH_SETUP_FAST -eq '1') { $shortcutArgs += '--fast' }
+        if ($env:DSH_SETUP_LAN -eq '1') { $shortcutArgs += '--lan' }
+        $lnk = New-DesktopShortcut -Arguments ($shortcutArgs -join ' ')
         if ($null -ne $lnk) {
-            $modeDesc = if ($env:DSH_SETUP_FAST -eq '1') { (T '（包含 --fast 极速启动参数）' ' (with --fast arg)') } else { '' }
+            $modeDesc = if ($shortcutArgs.Count -gt 0) { (T ("（包含 {0} 启动参数）" -f ($shortcutArgs -join ' ')) (" (with {0} args)" -f ($shortcutArgs -join ' '))) } else { '' }
             Write-Ok (T ("已在桌面创建快捷方式{0}：{1}" -f $modeDesc, $lnk) ("Shortcut created{0}: {1}" -f $modeDesc, $lnk))
         }
         Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
@@ -1568,25 +1681,32 @@ function Main {
 
     Write-Host '  │  │' -ForegroundColor DarkCyan
     $swPort = [Diagnostics.Stopwatch]::StartNew()
-    $port = Get-WebPort
+    $webHost = Get-WebHost
+    if ($webHost.IsLan) {
+        Write-Notice (T ("--lan 已启用：{0} 会向同一局域网暴露具备 shell/文件能力的 Agent；仅在可信网络使用，并确认防火墙仅放行专用网络。" -f $webHost.Host) ("--lan enabled: {0} exposes a shell/file-capable agent to the LAN; use trusted networks only and keep the firewall scoped to Private networks." -f $webHost.Host))
+    }
+    $port = Get-WebPort -HostAddress $webHost.Host
     $swPort.Stop()
-    Write-TimedLine -Prefix "  ● [3/3] " -Title (T ("本地 Web 服务端口就绪 (Port {0})" -f $port) ("Local web port ready (Port {0})" -f $port)) -ElapsedMs $swPort.ElapsedMilliseconds
+    Write-TimedLine -Prefix "  ● [3/3] " -Title (T ("Web 服务端口就绪 (Port {0})" -f $port) ("Web port ready (Port {0})" -f $port)) -ElapsedMs $swPort.ElapsedMilliseconds
     Write-Host '  │' -ForegroundColor DarkCyan
     Write-BoxFooter
     Write-Host ''
     $Global:InPipeline = $false
 
     Show-StatusCard -Arch $nodeMeta.Architecture -NodeVer $nodeMeta.Version -DshVer $dshVersion -MirrorSource $dshMeta.Source
-    Show-Dashboard -Version $dshVersion -Port $port
+    Show-Dashboard -Port $port -HostAddress $webHost.Host -LanMode $webHost.IsLan -NoOpen ($env:DSH_SETUP_NO_OPEN -eq '1')
 
     # 启动后台异步 Web 活跃心跳探测
-    Start-WebHeartbeatPing -Port $port
+    Start-WebHeartbeatPing -Port $port -HostAddress $webHost.Host
 
-    if ($env:DSH_SETUP_NO_OPEN -eq '1') {
-        & $DshCmd web --port $port --no-open
-    } else {
-        & $DshCmd web --port $port
+    $webArguments = @('web', '--port', "$port")
+    if ($webHost.IsLan) {
+        $webArguments += @('--host', $webHost.Host)
     }
+    if ($env:DSH_SETUP_NO_OPEN -eq '1') {
+        $webArguments += '--no-open'
+    }
+    & $DshCmd @webArguments
     $webExitCode = $LASTEXITCODE
     # 正常退出码包括：0、130 (SIGINT/Ctrl+C)、-1073741510 (0xC000013A STATUS_CONTROL_C_EXIT) 等
     $isGracefulExit = ($webExitCode -eq 0 -or $webExitCode -eq 130 -or $webExitCode -eq -1073741510 -or $webExitCode -eq 3221225786)
