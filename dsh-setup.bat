@@ -460,9 +460,15 @@ function Start-WebHeartbeatPing {
                 try {
                     $req = [System.Net.HttpWebRequest]::Create(("http://{0}:{1}/" -f $h, $p))
                     $req.Timeout = 1000
-                    $resp = $req.GetResponse()
+                    $resp = $null
+                    try {
+                        $resp = $req.GetResponse()
+                    } catch [System.Net.WebException] {
+                        # dsh web 未登录访问会返回 401；有 HTTP 响应就说明服务已就绪。
+                        $resp = $_.Exception.Response
+                    }
                     if ($null -ne $resp) {
-                        $resp.Close()
+                        try { $resp.Close() } catch {}
                         Write-Host ''
                         Write-Host '  ● ' -ForegroundColor Green -NoNewline
                         $msg = if ($isEn) {
