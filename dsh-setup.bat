@@ -256,6 +256,8 @@ function Write-BoxFooter {
 }
 
 $Global:InPipeline = $false
+# 快捷面板里按 C 是一次按键即触发的高危动作，需要二次确认；命令行 --clean 不确认。
+$Global:CleanFromMenu = $false
 
 function Write-TimedLine {
     param(
@@ -660,7 +662,7 @@ function Show-Help {
     Write-Host (T '  │    --fast, --skip-check  极速模式：跳过版本检查秒启本地' '  │    --fast, --skip-check  Fast mode: skip check, launch local') -ForegroundColor Gray
     Write-Host (T '  │    --reinstall, --update 强制重装：重拉核心包并自检依赖' '  │    --reinstall, --update Reinstall: refetch core & probe') -ForegroundColor Gray
     Write-Host (T '  │    --clean, --reset      清理并重置便携目录 (dsh-runtime)' '  │    --clean, --reset      Clean portable runtime directory') -ForegroundColor Gray
-    Write-Host (T '  │    --create-shortcut     在当前桌面创建一键启动快捷方式' '  │    --create-shortcut     Create desktop shortcut and exit') -ForegroundColor Gray
+    Write-Host (T '  │    --create-shortcut     创建桌面快捷方式 (--shortcut)' '  │    --create-shortcut     Create shortcut (--shortcut)') -ForegroundColor Gray
     Write-Host (T '  │    --port <端口号>       指定 Web 端口（默认 3080 自动顺延）' '  │    --port <number>       Set web port (default: 3080 auto)') -ForegroundColor Gray
     Write-Host (T '  │    --lang <zh|en>        切换界面语言（默认系统语言自适应）' '  │    --lang <zh|en>        Switch language (default: system)') -ForegroundColor Gray
     Write-Host (T '  │    --no-open             服务就绪后不自动唤起默认浏览器' '  │    --no-open             Do not open browser automatically') -ForegroundColor Gray
@@ -716,9 +718,9 @@ function New-DesktopShortcut {
         $wsh = New-Object -ComObject WScript.Shell
         $shortcut = $wsh.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = $SetupPath
-        if (-not [string]::IsNullOrWhiteSpace($Arguments)) {
-            $shortcut.Arguments = $Arguments
-        }
+        # 必须无条件赋值：CreateShortcut 会载入已存在的 .lnk，
+        # 只在“有参数”时赋值会让上一次的 --lan / --fast 残留在新快捷方式里。
+        $shortcut.Arguments = $Arguments
         $shortcut.WorkingDirectory = $SetupRoot
         $shortcut.Description = (T 'DeepSeek Harness 一键启动' 'DeepSeek Harness One-Click Launcher')
         if (Test-Path -LiteralPath $NodeExe -PathType Leaf) {
@@ -747,6 +749,27 @@ function Get-MachineArchitecture {
         'ARM64' { return 'arm64' }
         default { throw (T "暂不支持此 Windows 架构：$value。需要 64 位 x64 或 ARM64。" "Windows architecture $value is not supported. 64-bit x64 or ARM64 required.") }
     }
+}
+
+function Get-EnvProxyArgument {
+    # .NET 的 WebRequest 只认系统 IE 代理设置，不会自动读取 HTTPS_PROXY /
+    # HTTP_PROXY / ALL_PROXY，而 curl 会读环境变量。为了让"索引查询"和
+    # "压缩包下载"两条链路对代理的处理保持一致，这里把环境变量里的
+    # http(s) 代理转成可直接 splat 的参数；WebRequest 不支持 socks5，
+    # 遇到其他协议时按原样处理（不传代理），行为与改动前一致。
+    foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        $candidate = $value.Trim()
+        if ($candidate -notmatch '^[a-zA-Z][a-zA-Z0-9+.\-]*://') {
+            $candidate = "http://$candidate"
+        }
+        $uri = $null
+        if ([Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri) -and ($uri.Scheme -eq 'http' -or $uri.Scheme -eq 'https')) {
+            return @{ Proxy = $uri }
+        }
+    }
+    return @{}
 }
 
 function Invoke-ParallelRegistryQuery {
@@ -824,9 +847,10 @@ function Invoke-ParallelRegistryQuery {
         }
     } catch {
         # 异常情况下安全回退到 Invoke-RestMethod
+        $proxyArgument = Get-EnvProxyArgument
         foreach ($target in @(@($OfficialRegistry, 'npm 官方仓库'), @($MirrorRegistry, '国内 npm 镜像'))) {
             try {
-                $meta = Invoke-RestMethod -Uri "$($target[0])/@deepseek-ai%2Fdsh" -TimeoutSec 5 -Headers @{ Accept = 'application/vnd.npm.install-v1+json' }
+                $meta = Invoke-RestMethod -Uri "$($target[0])/@deepseek-ai%2Fdsh" -TimeoutSec 5 -Headers @{ Accept = 'application/vnd.npm.install-v1+json' } @proxyArgument
                 $lat = [string]$meta.'dist-tags'.latest
                 if (-not [string]::IsNullOrWhiteSpace($lat)) {
                     $obj = [pscustomobject]@{ Name = $target[1]; Registry = $target[0]; Latest = $lat }
@@ -947,7 +971,8 @@ function Get-LatestNodeRelease {
 
     foreach ($source in $sources) {
         try {
-            $releases = Invoke-RestMethod -Uri $source.Index -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' }
+            $proxyArgument = Get-EnvProxyArgument
+            $releases = Invoke-RestMethod -Uri $source.Index -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' } @proxyArgument
             $release = $null
             foreach ($candidate in $releases) {
                 if ($candidate.lts -and ($candidate.files -contains $requiredFile) -and (Test-MinimumVersion ([string]$candidate.version) $MinimumNodeVersion)) {
@@ -1004,7 +1029,8 @@ function Get-NodeArchiveHash {
     $found = @()
     foreach ($source in $sources) {
         try {
-            $text = [string](Invoke-RestMethod -Uri $source -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' })
+            $proxyArgument = Get-EnvProxyArgument
+            $text = [string](Invoke-RestMethod -Uri $source -TimeoutSec 15 -Headers @{ 'User-Agent' = 'deepseek-harness-windows-installer' } @proxyArgument)
             $pattern = '^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($ArchiveName) + '\s*$'
             foreach ($line in ($text -split '\r?\n')) {
                 if ($line -match $pattern) {
@@ -1037,17 +1063,20 @@ function Get-CurlExecutable {
     # 部分 Windows 10 自带 curl 7.55.1，缺少 --ssl-revoke-best-effort。
     # 探测一次避免传错参数直接退出码 2。
     $supportsRevokeBestEffort = $false
+    # 探测失败也必须还原 $ErrorActionPreference，否则整个进程会退化成非终止错误，
+    # 后续 Remove-Item / Move-Item 失败时不再抛错。
+    $savedErrorAction = $ErrorActionPreference
     try {
-        $savedErrorAction = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         $help = (& $curl.Source --help all 2>&1 | Out-String)
         if ($LASTEXITCODE -ne 0) {
             $help = (& $curl.Source --help 2>&1 | Out-String)
         }
-        $ErrorActionPreference = $savedErrorAction
         $supportsRevokeBestEffort = $help -match 'ssl-revoke-best-effort'
     } catch {
         $supportsRevokeBestEffort = $false
+    } finally {
+        $ErrorActionPreference = $savedErrorAction
     }
 
     return [pscustomobject]@{
@@ -1091,20 +1120,46 @@ function Invoke-SingleDownload {
         Write-Notice (T ("curl 下载失败（退出码 {0}），改用系统下载组件重试。" -f $curlExitCode) ("curl download failed (exit code {0}), retrying with system web client." -f $curlExitCode))
     }
 
-    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120
+    $proxyArgument = Get-EnvProxyArgument
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120 @proxyArgument
 }
 
-function Test-ZipArchiveHeader {
+function Test-ZipArchive {
     param([string]$Path)
 
-    # 代理错误页、截断文件等也可能"存在且非空"，用 ZIP 魔数 (PK) 快速判别，
-    # 避免坏压缩包进入解压阶段才报错、且不再尝试下一个下载源。
+    # 代理错误页、截断文件等也可能"存在且非空"。只校验 PK 魔数不够：被截断的
+    # zip 头部仍然以 PK\x03\x04 开头，却要到 Expand-Archive 阶段才失败，那时
+    # 已经不会再尝试下一个下载源。因此同时要求尾部存在中央目录结束记录
+    # (PK\x05\x06)，才能判定为完整可解压的压缩包。
     try {
         $stream = [IO.File]::OpenRead($Path)
         try {
-            $header = New-Object byte[] 2
-            $read = $stream.Read($header, 0, 2)
-            return ($read -eq 2 -and $header[0] -eq 0x50 -and $header[1] -eq 0x4B)
+            if ($stream.Length -lt 22) {
+                return $false
+            }
+
+            $header = New-Object byte[] 4
+            $read = $stream.Read($header, 0, 4)
+            if ($read -ne 4 -or $header[0] -ne 0x50 -or $header[1] -ne 0x4B -or $header[2] -ne 0x03 -or $header[3] -ne 0x04) {
+                return $false
+            }
+
+            # EOCD 记录固定 22 字节，其后最多 64KB 注释，向后扫这段窗口即可。
+            $windowSize = [int][Math]::Min(66560, $stream.Length)
+            $stream.Position = $stream.Length - $windowSize
+            $tail = New-Object byte[] $windowSize
+            $filled = 0
+            while ($filled -lt $windowSize) {
+                $chunk = $stream.Read($tail, $filled, $windowSize - $filled)
+                if ($chunk -le 0) { break }
+                $filled += $chunk
+            }
+            for ($i = $filled - 22; $i -ge 0; $i--) {
+                if ($tail[$i] -eq 0x50 -and $tail[$i + 1] -eq 0x4B -and $tail[$i + 2] -eq 0x05 -and $tail[$i + 3] -eq 0x06) {
+                    return $true
+                }
+            }
+            return $false
         } finally {
             $stream.Dispose()
         }
@@ -1134,7 +1189,7 @@ function Invoke-FileDownload {
             if ($file.Length -le 0) {
                 throw (T '下载结果为空文件' 'Downloaded file is empty.')
             }
-            if (-not (Test-ZipArchiveHeader -Path $Destination)) {
+            if (-not (Test-ZipArchive -Path $Destination)) {
                 throw (T '下载结果不是有效的 Node.js 压缩包' 'Downloaded file is not a valid Node.js zip archive.')
             }
             if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
@@ -1612,7 +1667,7 @@ function Main {
         switch ($quickAction.ToLower()) {
             'f' { $env:DSH_SETUP_FAST = '1' }
             'r' { $env:DSH_SETUP_REINSTALL = '1' }
-            'c' { $env:DSH_SETUP_CLEAN = '1' }
+            'c' { $env:DSH_SETUP_CLEAN = '1'; $Global:CleanFromMenu = $true }
             's' { $env:DSH_SETUP_SHORTCUT = '1' }
             'h' { Show-Help; Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...'); exit 0 }
             'q' { exit 0 }
@@ -1622,6 +1677,20 @@ function Main {
     # 清理重置便携运行时指令
     if ($env:DSH_SETUP_CLEAN -eq '1') {
         Write-Step (T '清理便携运行时环境' 'Clean Portable Runtime Environment')
+        # 快捷面板按 C 只需一次按键，误触就会丢掉整套运行时；这里补一次确认。
+        if ($Global:CleanFromMenu) {
+            $answer = ''
+            try {
+                $answer = [string](Read-Host (T '清理会删除便携运行时（Node.js 与 dsh），下次运行需重新下载。确认清理？(Y/N)' 'This removes the portable runtime (Node.js and dsh); the next run re-downloads it. Continue? (Y/N)'))
+            } catch {
+                $answer = ''
+            }
+            if ($answer.Trim() -notmatch '^y') {
+                Write-Notice (T '已取消清理，未删除任何文件。' 'Cleanup canceled; nothing was deleted.')
+                Wait-ForClose (T '按回车键关闭窗口...' 'Press Enter to exit...')
+                exit 0
+            }
+        }
         if (Test-Path -LiteralPath $RuntimeRoot) {
             Write-Info (T ("正在清理目录：{0}..." -f $RuntimeRoot) ("Cleaning directory: {0}..." -f $RuntimeRoot))
             try {
@@ -1675,7 +1744,7 @@ function Main {
 
     if ($env:DSH_SETUP_INSTALL_ONLY -eq '1') {
         Write-Host '  │  │' -ForegroundColor DarkCyan
-        Write-TimedLine -Prefix "  ● [3/3] " -Title (T '安装校验模式完成（不启动网页服务）' 'Installation verified (service not started)') -ElapsedMs 0
+        Write-TimedLine -Prefix "  ● [3/3] " -Title (T '安装校验模式完成（不启动网页服务）' 'Installation verified (service not started)') -ElapsedMs ([int]$Global:SessionStopwatch.ElapsedMilliseconds)
         Write-Host '  │' -ForegroundColor DarkCyan
         Write-BoxFooter
         Write-Host ''
