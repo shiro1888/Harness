@@ -461,6 +461,9 @@ function Start-WebHeartbeatPing {
                 Start-Sleep -Milliseconds 600
                 try {
                     $req = [System.Net.HttpWebRequest]::Create(("http://{0}:{1}/" -f $h, $p))
+                    # 本机/局域网探活必须直连：机房常配系统代理，一旦代理把
+                    # 192.168.x.x 也接管，心跳会一直超时、误报服务未就绪。
+                    $req.Proxy = $null
                     $req.Timeout = 1000
                     $resp = $null
                     try {
@@ -471,14 +474,18 @@ function Start-WebHeartbeatPing {
                     }
                     if ($null -ne $resp) {
                         try { $resp.Close() } catch {}
-                        Write-Host ''
-                        Write-Host '  ● ' -ForegroundColor Green -NoNewline
                         $msg = if ($isEn) {
                             ("Web heartbeat alive: HTTP responded in {0:N1}s." -f $sw.Elapsed.TotalSeconds)
                         } else {
                             ("Web 活跃心跳探测正常：HTTP 服务已于 {0:N1}s 成功握手响应。" -f $sw.Elapsed.TotalSeconds)
                         }
-                        Write-Host $msg -ForegroundColor White
+                        # 这段脚本跑在没有宿主的 runspace 里，Write-Host 的输出会被丢弃，
+                        # 只能直接写 Console.Out 才能在 dsh 自己的启动日志之间留下探活结果。
+                        try {
+                            [Console]::Out.WriteLine('')
+                            [Console]::Out.WriteLine(('  ● ' + $msg))
+                            [Console]::Out.Flush()
+                        } catch {}
                         break
                     }
                 } catch {}
@@ -489,6 +496,10 @@ function Start-WebHeartbeatPing {
 }
 
 function Get-LocalLanIp {
+    # 先按网卡别名挑地址；NetTCPIP 模块在精简系统/旧版本上可能不存在，
+    # 这种异常必须局限在这一段里，否则下面的 DNS 回退永远执行不到，
+    # --lan 会直接报"未检测到局域网地址"。
+    $ip = $null
     try {
         $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi*", "以太网*", "Ethernet*", "WLAN*", "本地连接*" -ErrorAction SilentlyContinue |
             Where-Object {
@@ -497,12 +508,17 @@ function Get-LocalLanIp {
                 $_.InterfaceAlias -notmatch "(vEthernet|VirtualBox|VMware|WSL|Tailscale|ZeroTier)"
             } |
             Select-Object -First 1).IPAddress
-        if (-not $ip) {
-            $ip = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
-                Where-Object { $_.AddressFamily -eq "InterNetwork" -and $_.IPAddressToString -notmatch "^(127\.|169\.254)" } |
-                Select-Object -First 1).IPAddressToString
-        }
+    } catch {
+        $ip = $null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ip)) {
         return $ip
+    }
+
+    try {
+        return ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
+            Where-Object { $_.AddressFamily -eq "InterNetwork" -and $_.IPAddressToString -notmatch "^(127\.|169\.254)" } |
+            Select-Object -First 1).IPAddressToString
     } catch {
         return $null
     }
